@@ -90,6 +90,24 @@ These changes are documented below and in the module docstrings.
 
 ## Large-network equilibrium approach
 
+### Persistent reuse and caching
+
+Repeated requests reuse work at two levels:
+
+- An in-memory LRU cache (16 topologies) reuses the constructed NetworkX graph,
+  bounded route set, state indices, and lazily computed Jacobian sparsity.
+- A persistent SQLite equilibrium bank stores up to 512 converged states per
+  network/profile fingerprint in `backend/.cache/equilibria.sqlite3`.
+
+An exact network/price/tolerance hit is never trusted blindly: its ODE residual
+and route-flow conservation error are recomputed before integration is skipped.
+For a nearby price vector, the closest stored state within RMS price distance
+0.35 is only a BDF warm start; a fresh integration and convergence check are
+still mandatory. Failed or non-finite solves are never cached. Cache keys also
+contain a model-version string, full canonical network configuration, route
+profile, and solver tolerance, preventing incompatible results from being
+reused. Set `EVCS_CACHE_PATH` to relocate the SQLite file.
+
 ### Accuracy profiles
 
 Simulation requests expose an `accuracy_mode` with three explicit trade-offs:

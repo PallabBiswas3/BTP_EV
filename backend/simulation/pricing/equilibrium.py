@@ -62,18 +62,26 @@ of letting NaN/Inf leak into the JSON response.
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from simulation.pricing import equilibrium_cache
+
 
 class EquilibriumResult:
-    __slots__ = ("state", "converged", "message", "residual", "conservation_error", "elapsed")
+    __slots__ = (
+        "state", "converged", "message", "residual", "conservation_error",
+        "elapsed", "cache_hit", "cache_warm_start",
+    )
 
     def __init__(self, state, converged, message="", residual=float("inf"),
-                 conservation_error=float("inf"), elapsed=0.0):
+                 conservation_error=float("inf"), elapsed=0.0, cache_hit=False,
+                 cache_warm_start=False):
         self.state = state
         self.converged = converged
         self.message = message
         self.residual = float(residual)
         self.conservation_error = float(conservation_error)
         self.elapsed = float(elapsed)
+        self.cache_hit = bool(cache_hit)
+        self.cache_warm_start = bool(cache_warm_start)
 
 
 def _conservation_error(net, state):
@@ -116,15 +124,33 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
     should surface the warning rather than silently trusting it as an exact
     fixed point.
     """
-    if y0 is None:
-        y0 = net.initial_state()
-
     def rhs(t, state):
         return net.dynamics(t, state, psi_override=psi)
 
     # A residual within 100x the target tolerance is treated as "practically
     # converged" for reporting purposes -- see module docstring, point 2.
     practical_tol = tol * 100
+    cached = equilibrium_cache.load_exact(net, psi, tol)
+    if cached is not None:
+        cached_state, _stored_residual, _stored_conservation, cached_elapsed = cached
+        residual_l1 = np.linalg.norm(rhs(0.0, cached_state), ord=1)
+        residual = residual_l1 / max(1, net.N_STATES) if net.N_STATES > 200 else residual_l1
+        conservation = _conservation_error(net, cached_state)
+        if residual <= practical_tol and conservation <= 1e-8:
+            return EquilibriumResult(
+                cached_state, converged=True, residual=residual,
+                conservation_error=conservation, elapsed=cached_elapsed,
+                cache_hit=True,
+            )
+
+    cache_warm_start = False
+    if y0 is None:
+        nearest = equilibrium_cache.load_nearest(net, psi)
+        if nearest is not None:
+            y0, _distance = nearest
+            cache_warm_start = True
+        else:
+            y0 = net.initial_state()
 
     def _solve(y_start):
         if net.N_STATES <= 200:
@@ -171,10 +197,17 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
             f"tolerance {practical_tol:.1e} after t={elapsed:g} "
             f"(t_max={t_max})."
         )
-        return EquilibriumResult(
+        result = EquilibriumResult(
             state, converged=converged, message=msg, residual=residual,
             conservation_error=_conservation_error(net, state), elapsed=elapsed,
+            cache_warm_start=cache_warm_start,
         )
+        if result.converged:
+            equilibrium_cache.store(
+                net, psi, tol, result.state, result.residual,
+                result.conservation_error, result.elapsed,
+            )
+        return result
 
     try:
         state, success, _message, elapsed = _solve(y0)

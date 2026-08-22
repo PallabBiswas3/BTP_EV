@@ -292,6 +292,9 @@ export default function App() {
               <div><span>Conservation error</span><strong>{result.equilibrium.quality.conservation_error.toExponential(2)}</strong></div>
               <div><span>Gradient</span><strong>{result.equilibrium.quality.gradient_method}</strong></div>
               <div><span>Pricing iterations</span><strong>{result.equilibrium.quality.completed_steps} · {result.equilibrium.quality.stop_reason}</strong></div>
+              {(result.equilibrium.quality.cache_hit_count > 0 || result.equilibrium.quality.cache_warm_start_count > 0) && (
+                <div className="quality-detail">Cache reused {result.equilibrium.quality.cache_hit_count} exact equilibria and {result.equilibrium.quality.cache_warm_start_count} nearby warm starts.</div>
+              )}
               {!result.equilibrium.quality.outer_converged && (
                 <div className="quality-detail">The projected price update did not remain below {result.equilibrium.quality.outer_tolerance.toExponential(1)} for {result.equilibrium.quality.stable_steps_required} consecutive iterations. Final projected change: {result.equilibrium.quality.last_projected_price_change.toExponential(2)}.</div>
               )}

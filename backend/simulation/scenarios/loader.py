@@ -4,6 +4,7 @@ registry. `build_network_from_json(path)` from the original
 `simulator_paper_generalised.py` is kept as a thin backward-compatible
 wrapper around the new `build_network_from_data(dict)`.
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -55,6 +56,16 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
     net = ChargingNetwork(
         classes=classes, defaults=defaults, path_settings=path_settings,
     )
+    fingerprint_payload = {
+        "network": data,
+        "path_settings": path_settings or {},
+        "builder_version": "bounded-routes-v2",
+    }
+    net.cache_fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
     for road in data.get("roads", []):
         net.add_road(

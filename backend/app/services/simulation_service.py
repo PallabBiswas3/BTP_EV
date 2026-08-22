@@ -4,7 +4,9 @@ Every NumPy scalar/array is converted to native Python float/list before
 leaving this module, per the "avoid returning NumPy objects directly"
 requirement.
 """
+import json
 import math
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -46,9 +48,19 @@ PATH_PROFILES = {
 }
 
 
-def build_network(network_config: dict, accuracy_mode="preview"):
+@lru_cache(maxsize=16)
+def _build_network_cached(serialized_config: str, accuracy_mode: str):
     path_settings = PATH_PROFILES.get(accuracy_mode, PATH_PROFILES["preview"])
-    return build_network_from_data(network_config, path_settings=path_settings)
+    return build_network_from_data(
+        json.loads(serialized_config), path_settings=path_settings,
+    )
+
+
+def build_network(network_config: dict, accuracy_mode="preview"):
+    serialized = json.dumps(
+        network_config, sort_keys=True, separators=(",", ":"),
+    )
+    return _build_network_cached(serialized, accuracy_mode)
 
 
 def serialize_equilibrium(net, eq_result) -> dict:

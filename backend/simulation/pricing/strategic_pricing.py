@@ -220,6 +220,10 @@ def outer_loop(net, psi0=None, n_steps=30, kappa=0.1, delta=0.02,
         "route_limit": net.max_paths_per_group,
         "route_limit_hits": route_limit_hits,
         "inner_solve_count": len(inner_results),
+        "cache_hit_count": sum(result.cache_hit for result in inner_results),
+        "cache_warm_start_count": sum(
+            result.cache_warm_start for result in inner_results
+        ),
         "inner_failure_count": len(failed_inner),
         "max_inner_residual": max((result.residual for result in inner_results), default=0.0),
         "final_residual": eq.residual,

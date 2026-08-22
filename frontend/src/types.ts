@@ -109,6 +109,8 @@ export interface EquilibriumBlock {
     route_limit: number
     route_limit_hits: string[]
     inner_solve_count: number
+    cache_hit_count: number
+    cache_warm_start_count: number
     inner_failure_count: number
     max_inner_residual: number
     final_residual: number
