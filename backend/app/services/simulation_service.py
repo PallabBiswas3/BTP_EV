@@ -32,11 +32,23 @@ def _network_options_to_kwargs(opts) -> dict:
     return dict(
         n_steps=opts.n_steps, kappa=opts.kappa, delta=opts.delta,
         dt_outer=opts.dt_outer, psi_max=opts.psi_max, grad_clip=opts.grad_clip,
+        accuracy_mode=opts.accuracy_mode,
+        max_outer_steps=opts.max_outer_steps,
+        outer_tolerance=opts.outer_tolerance,
+        stable_outer_steps=opts.stable_outer_steps,
     )
 
 
-def build_network(network_config: dict):
-    return build_network_from_data(network_config)
+PATH_PROFILES = {
+    "preview": dict(k_per_segment=4, k_per_station=2, max_paths_per_group=8),
+    "balanced": dict(k_per_segment=6, k_per_station=4, max_paths_per_group=16),
+    "research": dict(k_per_segment=10, k_per_station=8, max_paths_per_group=32),
+}
+
+
+def build_network(network_config: dict, accuracy_mode="preview"):
+    path_settings = PATH_PROFILES.get(accuracy_mode, PATH_PROFILES["preview"])
+    return build_network_from_data(network_config, path_settings=path_settings)
 
 
 def serialize_equilibrium(net, eq_result) -> dict:
@@ -52,6 +64,10 @@ def serialize_equilibrium(net, eq_result) -> dict:
         "total_user_cost": _f(uc),
         "converged": bool(eq_result.converged),
         "warnings": list(eq_result.warnings),
+        "quality": {
+            key: (_f(value) if isinstance(value, (float, np.floating)) else value)
+            for key, value in eq_result.quality.items()
+        },
     }
 
 
@@ -155,7 +171,7 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
             report_progress(phase, step, n_steps)
 
     _report("Preparing network", 0, options.n_steps)
-    net = build_network(network_config)
+    net = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
     outer = outer_loop(
         net, psi0=options.psi0,
@@ -163,7 +179,10 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
         **kwargs,
     )
 
-    _report("Generating equilibrium-process trajectory", options.n_steps, options.n_steps)
+    _report(
+        "Generating equilibrium-process trajectory",
+        outer.quality["completed_steps"], outer.quality["maximum_steps"],
+    )
     # Each frame is the inner quasi-equilibrium estimated at one outer pricing
     # iteration. This exposes how prices shift routes, congestion, and station
     # utilization on the way to the final strategic equilibrium.
@@ -193,7 +212,7 @@ def run_equilibrium(network_config: dict, options, report_progress=None) -> dict
             report_progress(phase, step, n_steps)
 
     _report("Preparing network", 0, options.n_steps)
-    net = build_network(network_config)
+    net = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
     outer = outer_loop(
         net, psi0=options.psi0,
@@ -224,7 +243,7 @@ def run_beta_sweep(network_config: dict, options, beta_min: float, beta_max: flo
         if report_progress:
             report_progress(f"beta={beta:.2f} ({bi + 1}/{len(betas)})", bi, len(betas))
         cfg = _with_beta(network_config, beta)
-        net = build_network(cfg)
+        net = build_network(cfg, options.accuracy_mode)
         stations = list(net.stations.keys())
         if not stations_ref:
             stations_ref[:] = stations
@@ -255,7 +274,7 @@ def run_beta_sweep(network_config: dict, options, beta_min: float, beta_max: flo
 
 
 def run_compare_pricing(network_config: dict, options) -> dict:
-    net_strategic = build_network(network_config)
+    net_strategic = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
     outer = outer_loop(net_strategic, psi0=options.psi0, **kwargs)
     stations = list(net_strategic.stations.keys())
@@ -263,8 +282,11 @@ def run_compare_pricing(network_config: dict, options) -> dict:
     avg_price = sum(outer.psi.values()) / len(outer.psi) if outer.psi else 0.0
     fixed_psi = {s: avg_price for s in stations}
 
-    net_fixed = build_network(network_config)
-    eq_fixed = solve_equilibrium(net_fixed, fixed_psi)
+    net_fixed = build_network(network_config, options.accuracy_mode)
+    fixed_horizon = {"preview": 200.0, "balanced": 500.0, "research": 1000.0}[
+        options.accuracy_mode
+    ]
+    eq_fixed = solve_equilibrium(net_fixed, fixed_psi, t_max=fixed_horizon)
     profit_fixed, rho_fixed, occ_fixed = station_metrics(net_fixed, fixed_psi, eq_fixed.state)
     uc_fixed = total_user_cost(net_fixed, fixed_psi, eq_fixed.state)
     uc_strategic = total_user_cost(net_strategic, outer.psi, outer.state)

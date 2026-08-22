@@ -90,6 +90,37 @@ These changes are documented below and in the module docstrings.
 
 ## Large-network equilibrium approach
 
+### Accuracy profiles
+
+Simulation requests expose an `accuracy_mode` with three explicit trade-offs:
+
+| Profile | Maximum routes per OD/class | Inner horizons (cold/warm) | Price gradient |
+|---|---:|---:|---|
+| `preview` | 8 | 200 / 50 | simultaneous perturbation on large models |
+| `balanced` | 16 | 500 / 150 | simultaneous perturbation on large models |
+| `research` | 32 | 1000 / 300 | exact coordinate central differences |
+
+`preview` is the default because large Research runs can take minutes per
+pricing step. Use `research` for final reported results and run it as a
+background/offline calculation; the API continues to publish job progress.
+
+Small paper networks continue to use the calibrated 1000-unit horizon and
+coordinate central differences in every profile. `research` is the strictest
+available numerical estimate, but it is not labeled exact merely because it
+ran longer: the response includes a quality block with route-cap hits, inner
+residuals, path-flow conservation error, gradient method, and a `certified`
+flag. A run is certified only when every nominal and gradient-perturbation
+solve meets tolerance, no OD/class group reaches an internal candidate-route
+cap, and the final outer-loop price change is at most `1e-4`.
+
+For models above 200 states, `n_steps` is a minimum rather than a hard stop.
+After that many iterations, pricing continues until the maximum station-price
+change is at most `outer_tolerance` for `stable_outer_steps` consecutive fully
+converged iterations. `max_outer_steps` is the required safety limit for a
+network that never settles. The defaults are `1e-4`, 3, and 120 respectively,
+and all three are editable in Solver settings. Small and paper networks retain
+exactly `n_steps` iterations.
+
 The original builder enumerated every simple path for every OD pair and
 vehicle class. That works for the small paper topology, but path counts grow
 combinatorially on cyclic road networks. The bundled 24-node, 76-road,
@@ -100,9 +131,9 @@ The backend uses the following large-network strategy.
 
 ### 1. Bounded, class-feasible route sets
 
-`ChargingNetwork.build()` now retains at most eight ranked K-shortest simple
-paths for each `(OD, class)` population. It also enforces the paper's route
-definitions:
+`ChargingNetwork.build()` retains a profile-dependent number of ranked
+K-shortest simple paths for each `(OD, class)` population (8, 16, or 32).
+It also enforces the paper's route definitions:
 
 - An EV path contains exactly one charging-station access edge.
 - An NEV path contains no charging-station access edge.
@@ -114,7 +145,7 @@ The shortest candidate through every reachable station is retained first;
 remaining slots are filled by free-flow path cost. This prevents the nearest
 station from consuming the entire route set.
 
-For `network_ods_roads_stations.json`, the resulting model contains:
+For `network_ods_roads_stations.json`, the Preview model contains:
 
 ```text
 110 road-density states
@@ -153,9 +184,10 @@ The first pricing solve is cold-started. Every later nominal and perturbed
 solve starts from the preceding equilibrium estimate because consecutive
 price profiles are close.
 
-- Small and paper networks retain the calibrated cold horizon of 800.
-- Models with more than 200 states cap the initial estimate at 200.
-- Warm continuation and perturbation solves use a horizon of 50.
+- Small and paper networks use the paper's calibrated 1000-unit horizon for
+  every nominal and price-perturbation solve.
+- Models with more than 200 states use the profile's cold horizon.
+- Warm continuation and perturbation solves use the profile's warm horizon.
 
 The shorter large-network horizons avoid spending most of the request driving
 tiny route shares toward a numerically stiff boundary before prices adapt.
@@ -167,10 +199,10 @@ Small and paper networks retain the original coordinate-wise central
 difference, which costs `2S` perturbed solves for `S` stations per pricing
 iteration.
 
-Models with more than 200 states and more than three stations use a
-simultaneous central perturbation (an SPSA-style estimate). A deterministic
-Rademacher direction perturbs every station price up and down, allowing two
-equilibrium solves to estimate the complete station pseudo-gradient:
+In Preview and Balanced, models with more than 200 states and more than three
+stations use averaged simultaneous central perturbations (SPSA-style
+estimates). Preview averages two independent directions and Balanced averages
+four. Each Rademacher direction perturbs every station price up and down:
 
 ```text
 psi_plus  = psi + delta * direction
@@ -180,9 +212,15 @@ gradient_s ~= (profit_s(psi_plus) - profit_s(psi_minus))
               / (psi_plus_s - psi_minus_s)
 ```
 
-This reduces each large-network pricing iteration from one nominal plus `2S`
-solves to one nominal plus two solves. Price bounds and gradient clipping are
-still applied.
+The averaged gradient is exponentially smoothed (`0.75` previous plus `0.25`
+new), and its gain follows `kappa / (k + 1)^0.602`; the perturbation follows
+`delta / (k + 1)^0.101`. These standard diminishing SPSA schedules remove the
+persistent fluctuation caused by a one-sample estimate with constant gain.
+Research mode deliberately pays for the original coordinate-wise `2S`
+perturbation solves. Price bounds and gradient clipping are still applied.
+Convergence is checked against the projected update at the original full
+`kappa`, not the diminished gain, so gain decay cannot create a false
+convergence result.
 
 ### Accuracy and measured performance
 
@@ -191,16 +229,11 @@ representative route set. It is not an exhaustive all-simple-path solution,
 which is unsuitable for an interactive service. Small and paper networks keep
 their complete route sets and coordinate-wise gradients.
 
-Measured locally for `network_ods_roads_stations.json`:
-
-```text
-One pricing-step request before the final optimization: 34.4 seconds
-One pricing-step request after optimization:              6.2 seconds
-Three pricing-step request after optimization:            10.0 seconds
-```
-
-Actual runtime depends on CPU, solver tolerances, topology, demand, and the
-number of pricing steps.
+The stabilized Preview estimator now performs four perturbed solves per
+pricing iteration (two averaged central directions), so measurements from the
+former one-direction implementation are not comparable. Actual runtime
+depends on CPU, solver tolerances, topology, demand, and the number of pricing
+steps. Use the job progress response rather than assuming a fixed duration.
 
 ## Running tests / a quick smoke check
 

@@ -33,7 +33,7 @@ export default function ControlsPanel({
     onNetworkChange({ ...network, defaults: { ...network.defaults, [key]: value } })
   }
 
-  const setOption = (key: keyof SimulationOptions, value: number) => {
+  const setOption = (key: keyof SimulationOptions, value: number | SimulationOptions['accuracy_mode']) => {
     onOptionsChange({ ...options, [key]: value })
   }
 
@@ -153,9 +153,32 @@ export default function ControlsPanel({
           <span className="mono muted">{solverOpen ? '−' : '+'}</span>
         </div>
         {solverOpen && (
-          <div className="two-col-form" style={{ marginTop: 12 }}>
-            <label>Pricing steps
+          <div style={{ marginTop: 12 }}>
+            <label>Accuracy profile
+              <select
+                value={options.accuracy_mode}
+                onChange={(e) => setOption('accuracy_mode', e.target.value as SimulationOptions['accuracy_mode'])}
+              >
+                <option value="preview">Preview - interactive default</option>
+                <option value="balanced">Balanced - stronger estimate</option>
+                <option value="research">Research - strictest</option>
+              </select>
+            </label>
+            <p className="muted" style={{ marginTop: 6, marginBottom: 12 }}>
+              Research uses more candidate routes, exact station-by-station gradients, and longer inner solves.
+            </p>
+            <div className="two-col-form">
+            <label>Minimum pricing steps
               <input type="number" min={1} max={200} value={options.n_steps} onChange={(e) => setOption('n_steps', Number(e.target.value))} />
+            </label>
+            <label>Maximum pricing steps
+              <input type="number" min={1} max={500} value={options.max_outer_steps} onChange={(e) => setOption('max_outer_steps', Number(e.target.value))} />
+            </label>
+            <label>Price-change tolerance
+              <input type="number" min={0.000001} max={0.1} step={0.0001} value={options.outer_tolerance} onChange={(e) => setOption('outer_tolerance', Number(e.target.value))} />
+            </label>
+            <label>Stable iterations
+              <input type="number" min={1} max={20} value={options.stable_outer_steps} onChange={(e) => setOption('stable_outer_steps', Number(e.target.value))} />
             </label>
             <label>Sim. time t_end
               <input type="number" min={1} value={options.t_end} onChange={(e) => setOption('t_end', Number(e.target.value))} />
@@ -172,6 +195,7 @@ export default function ControlsPanel({
             <label>Outer step dt
               <input type="number" step="0.1" value={options.dt_outer} onChange={(e) => setOption('dt_outer', Number(e.target.value))} />
             </label>
+            </div>
           </div>
         )}
       </div>

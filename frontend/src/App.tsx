@@ -279,9 +279,25 @@ export default function App() {
           )}
           {result && !result.equilibrium.converged && (
             <div className="warning-banner">
-              The equilibrium solve didn't fully converge to the practical tolerance within the configured
-              pricing steps / t_end — values are typically still accurate to 3-4 significant figures, but
-              consider increasing "Pricing steps" for a tighter result.
+              One or more equilibrium solves did not meet the residual tolerance. Treat this run as an
+              estimate and use the Research profile or more pricing steps before reporting its values.
+            </div>
+          )}
+          {result && (
+            <div className={result.equilibrium.quality.certified ? 'quality-banner certified' : 'quality-banner estimated'}>
+              <div><span>Quality</span><strong>{result.equilibrium.quality.certified ? 'Numerically certified' : 'Estimate only'}</strong></div>
+              <div><span>Profile</span><strong>{result.equilibrium.quality.accuracy_mode}</strong></div>
+              <div><span>Routes / states</span><strong>{result.equilibrium.quality.path_count} / {result.equilibrium.quality.state_count}</strong></div>
+              <div><span>Final residual</span><strong>{result.equilibrium.quality.final_residual.toExponential(2)}</strong></div>
+              <div><span>Conservation error</span><strong>{result.equilibrium.quality.conservation_error.toExponential(2)}</strong></div>
+              <div><span>Gradient</span><strong>{result.equilibrium.quality.gradient_method}</strong></div>
+              <div><span>Pricing iterations</span><strong>{result.equilibrium.quality.completed_steps} · {result.equilibrium.quality.stop_reason}</strong></div>
+              {!result.equilibrium.quality.outer_converged && (
+                <div className="quality-detail">The projected price update did not remain below {result.equilibrium.quality.outer_tolerance.toExponential(1)} for {result.equilibrium.quality.stable_steps_required} consecutive iterations. Final projected change: {result.equilibrium.quality.last_projected_price_change.toExponential(2)}.</div>
+              )}
+              {result.equilibrium.quality.route_limit_hits.length > 0 && (
+                <div className="quality-detail">Route cap reached for {result.equilibrium.quality.route_limit_hits.join(', ')}.</div>
+              )}
             </div>
           )}
 

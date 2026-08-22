@@ -1,0 +1,4 @@
+u,v,name,classes,mu_s,a_s,c_s,phi0
+A1,D1,S1,EV,2.0,0.5,0.2,0.1
+A2,D2,S2,EV,2.0,0.5,0.2,0.1
+M,N,Sshared,EV,2.0,0.5,0.2,0.1

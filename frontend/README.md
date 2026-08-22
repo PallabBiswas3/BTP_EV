@@ -56,6 +56,11 @@ generic `share_<class>` columns. Empty optional cells inherit the active
 network defaults. On success, the generated network can be loaded directly or
 downloaded as `network.json`.
 
+Ready-to-import examples are stored under `examples/`. The exact topology
+used by the paper reproduction is in `examples/paper-network/`; select
+**Paper defaults** before importing it so the global `alpha`, `gamma`, and
+`eta` values also match the experiment.
+
 ## Notes on the design
 
 The original prototype in this repo used a dark, neon "crypto dashboard"

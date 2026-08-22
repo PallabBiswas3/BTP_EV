@@ -51,17 +51,10 @@ documented at the point of change; summary:
    cheaper to reach -- and, combined with (3), it also means drift never
    gets the chance to accumulate across chained outer-loop steps.
 
-`t_max` is reduced from the original 1000 to 800 by default. Empirically,
-performance is dominated by t_max linearly (BDF cost scales roughly with
-horizon length here) while accuracy is quite sensitive to it: on the
-paper's own network, t_max=300 converges the *outer* gradient-flow loop to
-prices about 15% higher than the paper's reported psi* = (0.377, 0.377,
-0.408) -- the inner solve just hadn't settled precisely enough for the
-outer finite-difference gradient to be unbiased -- while t_max=800
-reproduces psi* within ~1%, at roughly 10x the speed of the original
-RK45/event/no-warm-start combination (11s vs 106s for a 40-step run on the
-paper's network, verified against the unmodified original code). `t_max` is
-configurable per-request for callers who want to trade accuracy for speed.
+`t_max` defaults to the paper's original 1000-unit horizon for small models.
+This matters because an incompletely settled perturbed solve biases the
+finite-difference demand response and therefore the station price gradient.
+Large models use a separate bounded-horizon policy in `outer_loop()`.
 Every solve additionally has a defensive fallback so a
 misbehaving network returns a labeled "not fully converged" result instead
 of letting NaN/Inf leak into the JSON response.
@@ -71,12 +64,28 @@ from scipy.integrate import solve_ivp
 
 
 class EquilibriumResult:
-    __slots__ = ("state", "converged", "message")
+    __slots__ = ("state", "converged", "message", "residual", "conservation_error", "elapsed")
 
-    def __init__(self, state, converged, message=""):
+    def __init__(self, state, converged, message="", residual=float("inf"),
+                 conservation_error=float("inf"), elapsed=0.0):
         self.state = state
         self.converged = converged
         self.message = message
+        self.residual = float(residual)
+        self.conservation_error = float(conservation_error)
+        self.elapsed = float(elapsed)
+
+
+def _conservation_error(net, state):
+    """Maximum OD/class route-flow simplex error."""
+    maximum = 0.0
+    for (od_name, c), pids in net.game_groups.items():
+        od = next(o for o in net.ods if o["name"] == od_name)
+        target = od["class_shares"][c] * od["lam_fn"](0.0)
+        values = np.array([state[net.IDX[("y", pid)]] for pid in pids])
+        maximum = max(maximum, abs(float(values.sum()) - target))
+        maximum = max(maximum, max(0.0, -float(values.min())))
+    return maximum
 
 
 def _renormalize_path_flows(net, state):
@@ -97,7 +106,7 @@ def _renormalize_path_flows(net, state):
     return state
 
 
-def solve_equilibrium(net, psi, y0=None, t_max=800.0, tol=1e-6):
+def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
     """Integrate the closed inner (traffic + routing) system to steady state.
 
     Returns an EquilibriumResult. `converged=False` means the residual
@@ -118,6 +127,18 @@ def solve_equilibrium(net, psi, y0=None, t_max=800.0, tol=1e-6):
     practical_tol = tol * 100
 
     def _solve(y_start):
+        if net.N_STATES <= 200:
+            sol = solve_ivp(
+                rhs, (0.0, t_max), y_start, method="BDF",
+                rtol=1e-7, atol=1e-9, max_step=15.0,
+                jac_sparsity=net.jacobian_sparsity(),
+            )
+            if not sol.success or not sol.y.size or not np.all(np.isfinite(sol.y[:, -1])):
+                state = sol.y[:, -1] if sol.y.size else y_start
+                elapsed = float(sol.t[-1]) if sol.t.size else 0.0
+                return state, False, sol.message, elapsed
+            return _renormalize_path_flows(net, sol.y[:, -1]), True, "", t_max
+
         # Project periodically instead of only at t_max. Replicator dynamics
         # conserve each OD/class simplex analytically, but a long stiff solve
         # can drift far enough from it that BDF's step size collapses.
@@ -135,19 +156,25 @@ def solve_equilibrium(net, psi, y0=None, t_max=800.0, tol=1e-6):
                 return state, False, sol.message, elapsed
             state = _renormalize_path_flows(net, sol.y[:, -1])
             elapsed = end
-            if np.linalg.norm(rhs(elapsed, state), ord=1) <= practical_tol:
+            mean_residual = np.linalg.norm(rhs(elapsed, state), ord=1) / max(1, net.N_STATES)
+            if mean_residual <= practical_tol:
                 break
         return state, True, "", elapsed
 
     def _finalize(state, elapsed):
-        residual = np.linalg.norm(rhs(elapsed, state), ord=1)
+        residual_l1 = np.linalg.norm(rhs(elapsed, state), ord=1)
+        residual = residual_l1 / max(1, net.N_STATES) if net.N_STATES > 200 else residual_l1
         converged = bool(residual <= practical_tol)
         msg = "" if converged else (
-            f"Residual ||dx/dt||_1={residual:.2e} still above practical "
+            f"Residual {'mean |dx/dt|' if net.N_STATES > 200 else '||dx/dt||_1'}="
+            f"{residual:.2e} still above practical "
             f"tolerance {practical_tol:.1e} after t={elapsed:g} "
             f"(t_max={t_max})."
         )
-        return EquilibriumResult(state, converged=converged, message=msg)
+        return EquilibriumResult(
+            state, converged=converged, message=msg, residual=residual,
+            conservation_error=_conservation_error(net, state), elapsed=elapsed,
+        )
 
     try:
         state, success, _message, elapsed = _solve(y0)

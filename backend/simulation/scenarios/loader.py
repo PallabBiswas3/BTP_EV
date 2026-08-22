@@ -48,11 +48,13 @@ SCENARIO_DESCRIPTIONS = {
 }
 
 
-def build_network_from_data(data: dict) -> ChargingNetwork:
+def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
     defaults = data.get("defaults", DEFAULT_DEFAULTS)
     classes = data.get("classes", ["EV", "NEV"])
 
-    net = ChargingNetwork(classes=classes, defaults=defaults)
+    net = ChargingNetwork(
+        classes=classes, defaults=defaults, path_settings=path_settings,
+    )
 
     for road in data.get("roads", []):
         net.add_road(

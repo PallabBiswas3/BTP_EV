@@ -51,7 +51,7 @@ class ChargingNetwork:
     K_PER_STATION = 2
     MAX_PATHS_PER_GROUP = 8
 
-    def __init__(self, classes, defaults=None):
+    def __init__(self, classes, defaults=None, path_settings=None):
         self.classes = list(classes)
         self.defaults = dict(
             l0=0.25, L=2.0, a=1.0,
@@ -60,6 +60,13 @@ class ChargingNetwork:
         )
         if defaults:
             self.defaults.update(defaults)
+
+        path_settings = path_settings or {}
+        self.k_per_segment = int(path_settings.get("k_per_segment", self.K_PER_SEGMENT))
+        self.k_per_station = int(path_settings.get("k_per_station", self.K_PER_STATION))
+        self.max_paths_per_group = int(
+            path_settings.get("max_paths_per_group", self.MAX_PATHS_PER_GROUP)
+        )
 
         self.G = nx.MultiDiGraph()
         self.stations = {}
@@ -124,11 +131,12 @@ class ChargingNetwork:
                     (nodes[i], nodes[i + 1], edge_key[(nodes[i], nodes[i + 1])])
                     for i in range(len(nodes) - 1)
                 ])
-                if len(paths) >= limit:
+                if len(paths) > limit:
+                    self._path_search_truncated = True
                     break
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return []
-        return paths
+        return paths[:limit]
 
     def _free_flow_path_cost(self, edges):
         total = 0.0
@@ -154,17 +162,17 @@ class ChargingNetwork:
 
         if not stations:
             return self._k_shortest_edge_paths(
-                road_graph, od["origin"], od["dest"], self.MAX_PATHS_PER_GROUP,
+                road_graph, od["origin"], od["dest"], self.max_paths_per_group,
             )
 
         candidates_by_station = []
         for station_edge in stations:
             u_station, v_station, _ = station_edge
             before = self._k_shortest_edge_paths(
-                road_graph, od["origin"], u_station, self.K_PER_SEGMENT,
+                road_graph, od["origin"], u_station, self.k_per_segment,
             )
             after = self._k_shortest_edge_paths(
-                road_graph, v_station, od["dest"], self.K_PER_SEGMENT,
+                road_graph, v_station, od["dest"], self.k_per_segment,
             )
             candidates = []
             seen = set()
@@ -181,15 +189,20 @@ class ChargingNetwork:
                         candidates.append(path)
             candidates.sort(key=self._free_flow_path_cost)
             if candidates:
-                candidates_by_station.append(candidates[:self.K_PER_STATION])
+                if len(candidates) > self.k_per_station:
+                    self._path_search_truncated = True
+                candidates_by_station.append(candidates[:self.k_per_station])
 
         # Preserve station diversity first, then fill the remaining route
         # budget with the best alternatives across all reachable stations.
         selected = [paths[0] for paths in candidates_by_station]
         remaining = [path for paths in candidates_by_station for path in paths[1:]]
         remaining.sort(key=self._free_flow_path_cost)
-        selected.extend(remaining[:max(0, self.MAX_PATHS_PER_GROUP - len(selected))])
-        return selected[:self.MAX_PATHS_PER_GROUP]
+        remaining_slots = max(0, self.max_paths_per_group - len(selected))
+        if len(remaining) > remaining_slots:
+            self._path_search_truncated = True
+        selected.extend(remaining[:remaining_slots])
+        return selected[:self.max_paths_per_group]
 
     def build(self, max_path_length=None, verbose=True):
         G = self.G
@@ -197,11 +210,13 @@ class ChargingNetwork:
         self.path_class = {}
         self.path_od = {}
         self.groups = {}
+        self.route_limit_hits = []
 
         for od in self.ods:
             for c in self.classes:
                 if c not in od["class_shares"] or od["class_shares"][c] == 0:
                     continue
+                self._path_search_truncated = False
                 paths = self._bounded_feasible_paths(od, c)
                 if not paths:
                     raise ValueError(
@@ -209,6 +224,8 @@ class ChargingNetwork:
                         f"class '{c}' ({od['origin']} -> {od['dest']}). "
                         f"Check link 'classes' assignments."
                     )
+                if self._path_search_truncated:
+                    self.route_limit_hits.append((od["name"], c))
                 pids = []
                 used_names = set()
                 for edges in paths:

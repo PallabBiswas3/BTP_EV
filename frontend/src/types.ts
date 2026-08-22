@@ -60,7 +60,11 @@ export interface ScenarioMeta {
 // ---- Simulation options (mirrors app/schemas/network.py SimulationOptions) ----
 
 export interface SimulationOptions {
+  accuracy_mode: 'preview' | 'balanced' | 'research'
   n_steps: number
+  max_outer_steps: number
+  outer_tolerance: number
+  stable_outer_steps: number
   kappa: number
   delta: number
   dt_outer: number
@@ -71,7 +75,11 @@ export interface SimulationOptions {
 }
 
 export const DEFAULT_SIMULATION_OPTIONS: SimulationOptions = {
+  accuracy_mode: 'preview',
   n_steps: 30,
+  max_outer_steps: 120,
+  outer_tolerance: 0.0001,
+  stable_outer_steps: 3,
   kappa: 0.1,
   delta: 0.02,
   dt_outer: 1.0,
@@ -91,6 +99,31 @@ export interface EquilibriumBlock {
   total_user_cost: number
   converged: boolean
   warnings: string[]
+  quality: {
+    accuracy_mode: 'preview' | 'balanced' | 'research'
+    gradient_method: string
+    gradient_samples: number
+    effective_kappa: number
+    state_count: number
+    path_count: number
+    route_limit: number
+    route_limit_hits: string[]
+    inner_solve_count: number
+    inner_failure_count: number
+    max_inner_residual: number
+    final_residual: number
+    conservation_error: number
+    last_price_change: number
+    last_projected_price_change: number
+    outer_converged: boolean
+    requested_steps: number
+    completed_steps: number
+    maximum_steps: number
+    outer_tolerance: number
+    stable_steps_required: number
+    stop_reason: string
+    certified: boolean
+  }
 }
 
 export interface OuterHistoryStation {

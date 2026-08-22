@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 
@@ -52,7 +52,11 @@ class NetworkConfig(BaseModel):
 
 
 class SimulationOptions(BaseModel):
+    accuracy_mode: Literal["preview", "balanced", "research"] = "preview"
     n_steps: int = Field(30, ge=1, le=200)
+    max_outer_steps: int = Field(120, ge=1, le=500)
+    outer_tolerance: float = Field(1e-4, gt=0, le=0.1)
+    stable_outer_steps: int = Field(3, ge=1, le=20)
     kappa: float = Field(0.1, gt=0)
     delta: float = Field(0.02, gt=0)
     dt_outer: float = Field(1.0, gt=0)
