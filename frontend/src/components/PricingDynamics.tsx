@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { OuterHistoryBlock } from '../types'
 import { colorForStation } from '../utils/colors'
 import LineSeriesChart from './LineSeriesChart'
@@ -19,7 +19,7 @@ export default function PricingDynamics({ history }: Props) {
   const stations = useMemo(() => (history ? Object.keys(history.stations) : []), [history])
   const [visible, setVisible] = useState<Set<string>>(new Set(stations))
 
-  useMemo(() => { if (stations.length && visible.size === 0) setVisible(new Set(stations)) }, [stations]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setVisible(new Set(stations)) }, [stations])
 
   if (!history) {
     return <div className="empty-state">Run a simulation to see how prices, throughput, occupancy and profit evolve across outer pricing iterations.</div>
@@ -71,6 +71,8 @@ export default function PricingDynamics({ history }: Props) {
                 x={history.step}
                 xLabel="outer step k"
                 yLabel={m.symbol}
+                referenceX={history.step[history.step.length - 1]}
+                referenceLabel="final"
                 series={stations.filter((s) => visible.has(s)).map((s) => ({
                   id: s, label: s, color: colorForStation(stations, s),
                   values: history.stations[s][m.key],

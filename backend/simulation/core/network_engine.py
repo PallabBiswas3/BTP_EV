@@ -11,6 +11,7 @@ see `latency()` below. Everything else is byte-for-byte the same logic
 as the original file.
 """
 import numpy as np
+import scipy.sparse as sp
 import networkx as nx
 from collections import defaultdict
 from scipy.integrate import solve_ivp
@@ -46,6 +47,10 @@ def station_throughput(x, a_s, mu_s):
 
 
 class ChargingNetwork:
+    K_PER_SEGMENT = 4
+    K_PER_STATION = 2
+    MAX_PATHS_PER_GROUP = 8
+
     def __init__(self, classes, defaults=None):
         self.classes = list(classes)
         self.defaults = dict(
@@ -94,6 +99,98 @@ class ChargingNetwork:
         self.ods.append(dict(name=name, origin=origin, dest=dest,
                               lam_fn=lam_fn, class_shares=dict(class_shares)))
 
+    def _as_simple_digraph(self, graph):
+        """Collapse road multiedges for NetworkX's k-shortest-path search."""
+        simple = nx.DiGraph()
+        edge_key = {}
+        for u, v, key, attrs in graph.edges(keys=True, data=True):
+            weight = float(attrs.get("l0", 1.0))
+            current = simple.get_edge_data(u, v)
+            if current is None or weight < current["weight"]:
+                simple.add_edge(u, v, weight=weight)
+                edge_key[(u, v)] = key
+        return simple, edge_key
+
+    def _k_shortest_edge_paths(self, graph, origin, dest, limit):
+        if origin == dest:
+            return [[]]
+        simple, edge_key = self._as_simple_digraph(graph)
+        if origin not in simple or dest not in simple:
+            return []
+        paths = []
+        try:
+            for nodes in nx.shortest_simple_paths(simple, origin, dest, weight="weight"):
+                paths.append([
+                    (nodes[i], nodes[i + 1], edge_key[(nodes[i], nodes[i + 1])])
+                    for i in range(len(nodes) - 1)
+                ])
+                if len(paths) >= limit:
+                    break
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return []
+        return paths
+
+    def _free_flow_path_cost(self, edges):
+        total = 0.0
+        for edge in edges:
+            attrs = self.G.edges[edge]
+            total += float(attrs["l0"] if attrs["kind"] == "road" else attrs["phi0"])
+        return total
+
+    def _bounded_feasible_paths(self, od, vehicle_class):
+        """Return a small, ranked route set conforming to the paper.
+
+        NEV paths contain no station links. EV paths contain exactly one.
+        Keeping only realistic shortest alternatives avoids the exponential
+        all-simple-path explosion on cyclic road networks.
+        """
+        allowed = [
+            (u, v, key) for u, v, key, attrs in self.G.edges(keys=True, data=True)
+            if vehicle_class in attrs["classes"]
+        ]
+        roads = [edge for edge in allowed if self.G.edges[edge]["kind"] == "road"]
+        stations = [edge for edge in allowed if self.G.edges[edge]["kind"] == "station"]
+        road_graph = self.G.edge_subgraph(roads)
+
+        if not stations:
+            return self._k_shortest_edge_paths(
+                road_graph, od["origin"], od["dest"], self.MAX_PATHS_PER_GROUP,
+            )
+
+        candidates_by_station = []
+        for station_edge in stations:
+            u_station, v_station, _ = station_edge
+            before = self._k_shortest_edge_paths(
+                road_graph, od["origin"], u_station, self.K_PER_SEGMENT,
+            )
+            after = self._k_shortest_edge_paths(
+                road_graph, v_station, od["dest"], self.K_PER_SEGMENT,
+            )
+            candidates = []
+            seen = set()
+            for prefix in before:
+                prefix_nodes = {u_station, *(edge[0] for edge in prefix)}
+                for suffix in after:
+                    suffix_nodes = {v_station, *(edge[1] for edge in suffix)}
+                    if prefix_nodes & suffix_nodes:
+                        continue
+                    path = prefix + [station_edge] + suffix
+                    signature = tuple(path)
+                    if signature not in seen:
+                        seen.add(signature)
+                        candidates.append(path)
+            candidates.sort(key=self._free_flow_path_cost)
+            if candidates:
+                candidates_by_station.append(candidates[:self.K_PER_STATION])
+
+        # Preserve station diversity first, then fill the remaining route
+        # budget with the best alternatives across all reachable stations.
+        selected = [paths[0] for paths in candidates_by_station]
+        remaining = [path for paths in candidates_by_station for path in paths[1:]]
+        remaining.sort(key=self._free_flow_path_cost)
+        selected.extend(remaining[:max(0, self.MAX_PATHS_PER_GROUP - len(selected))])
+        return selected[:self.MAX_PATHS_PER_GROUP]
+
     def build(self, max_path_length=None, verbose=True):
         G = self.G
         self.path_edges = {}
@@ -105,16 +202,7 @@ class ChargingNetwork:
             for c in self.classes:
                 if c not in od["class_shares"] or od["class_shares"][c] == 0:
                     continue
-                allowed_edges = [
-                    (u, v, k) for u, v, k, attrs in G.edges(keys=True, data=True)
-                    if c in attrs["classes"]
-                ]
-                H = G.edge_subgraph(allowed_edges)
-                try:
-                    paths = list(nx.all_simple_edge_paths(
-                        H, od["origin"], od["dest"], cutoff=max_path_length))
-                except nx.NodeNotFound:
-                    paths = []
+                paths = self._bounded_feasible_paths(od, c)
                 if not paths:
                     raise ValueError(
                         f"No feasible path found for OD '{od['name']}' "
@@ -153,7 +241,7 @@ class ChargingNetwork:
                 self.transitions[edges[i]].append((edges[i + 1], pid))
 
         road_state_keys = set()
-        station_edges = set()
+        station_edges = set(self.stations.values())
         for pid, edges in self.path_edges.items():
             c = self.path_class[pid]
             for e in edges:
@@ -188,6 +276,32 @@ class ChargingNetwork:
         if verbose:
             self._print_build_summary()
         return self
+
+    def jacobian_sparsity(self):
+        """Detect and cache the structural Jacobian sparsity for BDF."""
+        cached = getattr(self, "_jac_sparsity_cache", None)
+        if cached is not None:
+            return cached
+
+        reference_psi = {name: 0.5 for name in self.stations}
+        n_states = self.N_STATES
+        pattern = np.zeros((n_states, n_states), dtype=bool)
+        rng = np.random.default_rng(0)
+        initial = self.initial_state()
+        probes = [initial, np.abs(initial) + 0.05 * rng.random(n_states)]
+
+        for state in probes:
+            base = self.dynamics(0.0, state, psi_override=reference_psi)
+            for column in range(n_states):
+                step = 1e-6 * max(1.0, abs(state[column]))
+                perturbed = state.copy()
+                perturbed[column] += step
+                changed = self.dynamics(0.0, perturbed, psi_override=reference_psi)
+                pattern[:, column] |= (np.abs(changed - base) / step) > 1e-8
+
+        np.fill_diagonal(pattern, True)
+        self._jac_sparsity_cache = sp.csr_matrix(pattern)
+        return self._jac_sparsity_cache
 
     def _name_key(self, k):
         if k[0] == "xr":

@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   MarkerType,
+  Position,
   ReactFlow,
   type Edge,
   type Node,
@@ -10,7 +11,6 @@ import {
 
 import type { NetworkConfig, TrajectoryBlock } from '../types'
 import { computeLayout } from '../utils/layout'
-import { colorForIndex } from '../utils/colors'
 
 export type ViewMode = 'total' | 'ev' | 'nev' | 'latency'
 
@@ -30,14 +30,26 @@ interface TooltipState {
   title: string
 }
 
+const PRIVATE_STATION_COLOR = '#16a34a'
+const SHARED_STATION_COLOR = '#9333ea'
+
+function stationColor(name: string) {
+  return name.toLowerCase().includes('shared') || name.toLowerCase().startsWith('ssh')
+    ? SHARED_STATION_COLOR
+    : PRIVATE_STATION_COLOR
+}
+
 function stationPosition(
   u: { x: number; y: number },
   v: { x: number; y: number },
   offset: number,
 ) {
+  const dx = v.x - u.x
+  const dy = v.y - u.y
+  const length = Math.hypot(dx, dy) || 1
   return {
-    x: (u.x + v.x) / 2,
-    y: (u.y + v.y) / 2 + offset,
+    x: (u.x + v.x) / 2 - (dy / length) * offset,
+    y: (u.y + v.y) / 2 + (dx / length) * offset,
   }
 }
 
@@ -63,9 +75,8 @@ export default function NetworkGraph({
 
     // Normal road-network nodes
     layout.forEach((pos, id) => {
-      const isTerminal = network.ods.some(
-        (od) => od.origin === id || od.dest === id,
-      )
+      const isOrigin = network.ods.some((od) => od.origin === id)
+      const isDestination = network.ods.some((od) => od.dest === id)
 
       out.push({
         id,
@@ -76,7 +87,13 @@ export default function NetworkGraph({
         data: {
           label: id,
         },
-        className: isTerminal ? 'terminal-node' : undefined,
+        className: isOrigin
+          ? 'origin-node'
+          : isDestination
+            ? 'destination-node'
+            : 'junction-node',
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
         draggable: false,
       })
     })
@@ -88,29 +105,33 @@ export default function NetworkGraph({
 
       if (!u || !v) return
 
-      // Use the same color palette as the charts.
-      const color = colorForIndex(index)
+      const color = stationColor(station.name)
 
       out.push({
         id: `station:${station.name}`,
         position: stationPosition(
           u,
           v,
-          index % 2 === 0 ? -30 : 30,
+          index % 2 === 0 ? -46 : 46,
         ),
         data: {
           label: station.name,
         },
         className: `station-node${
+          color === SHARED_STATION_COLOR ? ' shared-station-node' : ' private-station-node'
+        }${
           selectedStation === station.name ? ' selected-node' : ''
         }`,
 
         // Every station gets its own chart-consistent color.
         style: {
-          background: `${color}22`,
-          border: `1.5px solid ${color}`,
-          color,
+          background: color,
+          border: `2px solid ${color}`,
+          color: '#ffffff',
         },
+
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
 
         draggable: false,
       })
@@ -148,7 +169,7 @@ export default function NetworkGraph({
       const arrowColor = isNevOnly ? '#9c8256' : '#9a927f'
 
       let intensity = 0
-      let valueLabel: string | undefined
+      let valueLabel = 'x 0.00'
 
       if (rt && idx >= 0) {
         const capRatio = rt.capacity_ratio[idx] ?? 0
@@ -186,7 +207,7 @@ export default function NetworkGraph({
         source: road.u,
         target: road.v,
 
-        type: 'smoothstep',
+        type: 'default',
 
         // Heavily loaded roads appear animated.
         animated: intensity > 0.5,
@@ -254,12 +275,12 @@ export default function NetworkGraph({
         occ !== undefined &&
         K !== undefined &&
         occ > K
+      const stationValueLabel = `x ${(occ ?? 0).toFixed(2)}`
 
-      // Same color used by station node and charts.
-      const color = colorForIndex(i)
+      const color = stationColor(station.name)
 
       const common = {
-        type: 'smoothstep' as const,
+        type: 'default' as const,
 
         animated: true,
 
@@ -287,6 +308,7 @@ export default function NetworkGraph({
         id: `station-in:${i}`,
         source: station.u,
         target: sid,
+        label: stationValueLabel,
 
         data: {
           kind: 'station',

@@ -88,6 +88,19 @@ export default function App() {
       .catch((err) => setError(err instanceof Error ? err.message : 'Could not load scenario.'))
   }
 
+  const importNetwork = (config: NetworkConfig) => {
+    setScenarioId('custom-csv')
+    setNetwork(config)
+    setResult(null)
+    setTimeIndex(0)
+    setPlaying(false)
+    setSelectedStation(null)
+    setBetaResult(null)
+    setCompareResult(null)
+    setValidationMsg({ ok: true, text: 'CSV network validated and loaded.' })
+    setError('')
+  }
+
   const onProgress = (phase: string, step: number, nSteps: number) => setProgress({ phase, step, nSteps })
 
   const simulate = async () => {
@@ -96,7 +109,8 @@ export default function App() {
     try {
       const r = await runSimulate(network, options, onProgress)
       setResult(r)
-      setTimeIndex(Math.max(0, r.trajectory.time.length - 1))
+      setTimeIndex(0)
+      setPlaying(r.trajectory.time.length > 1)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Simulation failed.')
     } finally {
@@ -208,6 +222,13 @@ export default function App() {
 
   const running = activeJob !== null
 
+  const togglePlayback = () => {
+    if (!result) return
+    const lastIndex = Math.max(0, result.trajectory.time.length - 1)
+    if (!playing && timeIndex >= lastIndex) setTimeIndex(0)
+    setPlaying((current) => !current)
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -233,6 +254,7 @@ export default function App() {
           options={options}
           running={running}
           onScenarioChange={selectScenario}
+          onImportNetwork={importNetwork}
           onNetworkChange={setNetwork}
           onOptionsChange={setOptions}
           onRun={simulate}
@@ -299,14 +321,14 @@ export default function App() {
                   onSelectStation={setSelectedStation}
                 />
                 <div className="timeline-row">
-                  <span>Sim. time t</span>
+                  <span>Equilibrium step</span>
                   <input type="range" min="0" max={Math.max(0, (result?.trajectory.time.length ?? 1) - 1)}
                          value={Math.min(timeIndex, (result?.trajectory.time.length ?? 1) - 1)}
                          onChange={(e) => setTimeIndex(Number(e.target.value))} disabled={!result} />
                   <strong>{result ? result.trajectory.time[Math.min(timeIndex, result.trajectory.time.length - 1)].toFixed(1) : '—'}</strong>
                 </div>
                 <div className="playback-row">
-                  <button onClick={() => setPlaying((p) => !p)} disabled={!result}>{playing ? 'Pause' : 'Play'}</button>
+                  <button onClick={togglePlayback} disabled={!result}>{playing ? 'Pause' : 'Play'}</button>
                   <button onClick={() => { setPlaying(false); setTimeIndex(0) }} disabled={!result}>Restart</button>
                   <select value={playbackSpeed} onChange={(e) => setPlaybackSpeed(Number(e.target.value))}>
                     <option value={0.5}>0.5×</option>
@@ -332,7 +354,7 @@ export default function App() {
 
           {tab === 'pricing' && <div className="panel network-panel"><PricingDynamics history={result?.outer_history ?? null} /></div>}
           {tab === 'routes' && <div className="panel network-panel"><RouteChoice trajectory={result?.trajectory ?? null} timeIndex={timeIndex} /></div>}
-          {tab === 'stations' && <div className="panel network-panel"><StationAnalysis trajectory={result?.trajectory ?? null} selectedStation={selectedStation} onSelectStation={setSelectedStation} /></div>}
+          {tab === 'stations' && <div className="panel network-panel"><StationAnalysis trajectory={result?.trajectory ?? null} timeIndex={timeIndex} selectedStation={selectedStation} onSelectStation={setSelectedStation} /></div>}
           {tab === 'adoption' && <div className="panel network-panel"><EVAdoption result={betaResult} running={activeJob === 'beta'} onRun={runBeta} /></div>}
           {tab === 'compare' && <div className="panel network-panel"><StrategicVsFixed result={compareResult} running={activeJob === 'compare'} onRun={runCompare} /></div>}
           {tab === 'paper' && (

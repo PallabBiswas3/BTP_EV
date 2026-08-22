@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { NetworkConfig, ScenarioMeta, SimulationOptions } from '../types'
 import { DEFAULT_SIMULATION_OPTIONS } from '../types'
+import CsvNetworkImport from './CsvNetworkImport'
 
 interface Props {
   scenarios: ScenarioMeta[]
@@ -9,6 +10,7 @@ interface Props {
   options: SimulationOptions
   running: boolean
   onScenarioChange: (scenario: string) => void
+  onImportNetwork: (network: NetworkConfig) => void
   onNetworkChange: (network: NetworkConfig) => void
   onOptionsChange: (options: SimulationOptions) => void
   onRun: () => void
@@ -22,7 +24,7 @@ const PAPER_DEFAULTS: NetworkConfig['defaults'] = {
 
 export default function ControlsPanel({
   scenarios, scenario, network, options, running,
-  onScenarioChange, onNetworkChange, onOptionsChange, onRun, onValidate,
+  onScenarioChange, onImportNetwork, onNetworkChange, onOptionsChange, onRun, onValidate,
 }: Props) {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [solverOpen, setSolverOpen] = useState(false)
@@ -69,6 +71,7 @@ export default function ControlsPanel({
       <label>
         Scenario
         <select value={scenario} onChange={(e) => onScenarioChange(e.target.value)}>
+          {scenario === 'custom-csv' && <option value="custom-csv">Custom CSV network</option>}
           {scenarios.map((s) => (
             <option key={s.id} value={s.id}>{s.id}.json · {s.label}</option>
           ))}
@@ -79,6 +82,8 @@ export default function ControlsPanel({
           {scenarios.find((s) => s.id === scenario)!.description}
         </p>
       )}
+
+      <CsvNetworkImport defaults={network.defaults} running={running} onImport={onImportNetwork} />
 
       <label>
         EV demand fraction β

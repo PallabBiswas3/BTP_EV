@@ -84,12 +84,123 @@ were tuned against the *unmodified* original code as ground truth (see the
 same docstring) to make sure none of this changed the actual equilibrium
 values the paper reports, only how fast and how reliably they're reached.
 
-`simulation/core/network_engine.py` has exactly one intentional change from
-the supplied file — the latency formula now includes the outflow-rate
-factor `a_i` that the paper's own definition requires (invisible under every
-bundled scenario, since they all use `a=1.0`, but would silently diverge
-from the paper for a custom network with `a != 1`). Everything else in that
-file is unchanged.
+`simulation/core/network_engine.py` also includes the latency correction,
+bounded class-feasible path generation, and a cached sparse-Jacobian pattern.
+These changes are documented below and in the module docstrings.
+
+## Large-network equilibrium approach
+
+The original builder enumerated every simple path for every OD pair and
+vehicle class. That works for the small paper topology, but path counts grow
+combinatorially on cyclic road networks. The bundled 24-node, 76-road,
+6-station network has approximately 66,512 EV paths and 20,759 NEV paths
+under unrestricted enumeration, producing roughly 87,000 route-flow states.
+
+The backend uses the following large-network strategy.
+
+### 1. Bounded, class-feasible route sets
+
+`ChargingNetwork.build()` now retains at most eight ranked K-shortest simple
+paths for each `(OD, class)` population. It also enforces the paper's route
+definitions:
+
+- An EV path contains exactly one charging-station access edge.
+- An NEV path contains no charging-station access edge.
+
+For each reachable EV station, the builder combines ranked road-only paths
+from the origin to the station entrance with ranked road-only paths from the
+station exit to the destination. Combinations that revisit a node are removed.
+The shortest candidate through every reachable station is retained first;
+remaining slots are filled by free-flow path cost. This prevents the nearest
+station from consuming the entire route set.
+
+For `network_ods_roads_stations.json`, the resulting model contains:
+
+```text
+110 road-density states
+  6 station-occupancy states
+ 96 route-choice states
+---
+212 total ODE states
+```
+
+Network construction takes approximately 0.08 seconds on the development
+machine.
+
+### 2. Sparse BDF integration
+
+The inner equilibrium still uses SciPy's BDF integrator. The network computes
+and caches a structural Jacobian sparsity pattern and passes it to `solve_ivp`
+as `jac_sparsity`. Network ODEs are sparse because a state interacts mainly
+with nearby edges and paths in its OD/class group. Supplying this structure
+avoids dense finite-difference Jacobian work on every solve.
+
+### 3. Chunked integration and route-flow projection
+
+Replicator dynamics analytically preserve
+`sum(path flows) = OD/class demand`, but a long numerical solve can drift away
+from that simplex and eventually make BDF fail with a required-step-size error.
+
+`solve_equilibrium()` therefore integrates in 50-time-unit chunks. After each
+chunk it clips negative path flows, renormalizes every OD/class group to its
+known demand, and checks the equilibrium residual. It stops early when the
+practical tolerance is reached. A failed warm start is retried from the
+canonical initial state.
+
+### 4. Warm-started pricing continuation
+
+The first pricing solve is cold-started. Every later nominal and perturbed
+solve starts from the preceding equilibrium estimate because consecutive
+price profiles are close.
+
+- Small and paper networks retain the calibrated cold horizon of 800.
+- Models with more than 200 states cap the initial estimate at 200.
+- Warm continuation and perturbation solves use a horizon of 50.
+
+The shorter large-network horizons avoid spending most of the request driving
+tiny route shares toward a numerically stiff boundary before prices adapt.
+Residual warnings remain visible in the API response and frontend.
+
+### 5. Adaptive price-gradient estimation
+
+Small and paper networks retain the original coordinate-wise central
+difference, which costs `2S` perturbed solves for `S` stations per pricing
+iteration.
+
+Models with more than 200 states and more than three stations use a
+simultaneous central perturbation (an SPSA-style estimate). A deterministic
+Rademacher direction perturbs every station price up and down, allowing two
+equilibrium solves to estimate the complete station pseudo-gradient:
+
+```text
+psi_plus  = psi + delta * direction
+psi_minus = psi - delta * direction
+
+gradient_s ~= (profit_s(psi_plus) - profit_s(psi_minus))
+              / (psi_plus_s - psi_minus_s)
+```
+
+This reduces each large-network pricing iteration from one nominal plus `2S`
+solves to one nominal plus two solves. Price bounds and gradient clipping are
+still applied.
+
+### Accuracy and measured performance
+
+Large-network mode computes a practical equilibrium estimate over a bounded,
+representative route set. It is not an exhaustive all-simple-path solution,
+which is unsuitable for an interactive service. Small and paper networks keep
+their complete route sets and coordinate-wise gradients.
+
+Measured locally for `network_ods_roads_stations.json`:
+
+```text
+One pricing-step request before the final optimization: 34.4 seconds
+One pricing-step request after optimization:              6.2 seconds
+Three pricing-step request after optimization:            10.0 seconds
+```
+
+Actual runtime depends on CPU, solver tolerances, topology, demand, and the
+number of pricing steps.
 
 ## Running tests / a quick smoke check
 

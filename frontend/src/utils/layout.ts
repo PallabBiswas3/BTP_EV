@@ -11,38 +11,35 @@ const LAYER_W = 190
 const ROW_H = 130
 
 /**
- * Auto-layout: BFS layering from source nodes (nodes with no incoming road
- * edge) so the diagram generalizes to any topology, not just the three
- * bundled scenarios. Station access links aren't used for layering (a
- * station sits *between* its u/v road nodes, not as its own layer) so the
- * road skeleton alone determines layer depth.
+ * Auto-layout: shortest-distance BFS layering from configured OD origins.
+ * This keeps traffic directed left-to-right and remains finite on cyclic or
+ * bidirectional networks. Stations sit between their endpoint road nodes.
  */
 export function computeLayout(network: NetworkConfig): Map<string, LayoutNode> {
   const nodeIds = new Set<string>()
   const adjacency = new Map<string, string[]>()
-  const hasIncoming = new Set<string>()
 
   const addEdge = (u: string, v: string) => {
     nodeIds.add(u); nodeIds.add(v)
     if (!adjacency.has(u)) adjacency.set(u, [])
     adjacency.get(u)!.push(v)
-    hasIncoming.add(v)
   }
 
   network.roads.forEach((r) => addEdge(r.u, r.v))
   network.stations.forEach((s) => addEdge(s.u, s.v))
 
-  const sources = [...nodeIds].filter((id) => !hasIncoming.has(id))
   const layer = new Map<string, number>()
   const queue: string[] = []
-  const roots = sources.length > 0 ? sources : [...nodeIds].slice(0, 1)
+  const configuredOrigins = [...new Set(network.ods.map((od) => od.origin))]
+    .filter((id) => nodeIds.has(id))
+  const roots = configuredOrigins.length > 0 ? configuredOrigins : [...nodeIds].slice(0, 1)
   roots.forEach((id) => { layer.set(id, 0); queue.push(id) })
 
   while (queue.length > 0) {
     const id = queue.shift()!
     const d = layer.get(id)!
     for (const next of adjacency.get(id) ?? []) {
-      if (!layer.has(next) || layer.get(next)! < d + 1) {
+      if (!layer.has(next)) {
         layer.set(next, d + 1)
         queue.push(next)
       }

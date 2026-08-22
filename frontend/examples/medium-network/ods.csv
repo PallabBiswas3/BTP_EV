@@ -1,0 +1,4 @@
+name,origin,dest,lam,EV,NEV
+OD1,O1,D1,1.0,0.60,0.40
+OD2,O2,D2,1.2,0.65,0.35
+OD3,O3,D3,0.9,0.55,0.45

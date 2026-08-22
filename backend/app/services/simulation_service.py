@@ -77,10 +77,11 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
     time = _arr(T)
 
     roads: dict[str, Any] = {}
-    labels = sorted({net.G.edges[e]["label"] for e in [k[0] for k in net.road_state_keys]})
-    for lbl in labels:
+    road_edges_by_label = {
+        net.G.edges[edge]["label"]: edge for edge in net.all_road_edges
+    }
+    for lbl, e in sorted(road_edges_by_label.items()):
         # Find one representative edge with this label to read static attrs.
-        e = next(ek for ek in [k[0] for k in net.road_state_keys] if net.G.edges[ek]["label"] == lbl)
         attrs = net.G.edges[e]
         ev = res_pp.get(f"x_{lbl}_EV")
         nev = res_pp.get(f"x_{lbl}_NEV")
@@ -162,9 +163,22 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
         **kwargs,
     )
 
-    _report("Generating trajectory", options.n_steps, options.n_steps)
-    sim_res = net.simulate(t_end=options.t_end, psi_override=outer.psi, y0=outer.state)
-    post = net.post_process(sim_res, psi_override=outer.psi)
+    _report("Generating equilibrium-process trajectory", options.n_steps, options.n_steps)
+    # Each frame is the inner quasi-equilibrium estimated at one outer pricing
+    # iteration. This exposes how prices shift routes, congestion, and station
+    # utilization on the way to the final strategic equilibrium.
+    frame_steps = np.arange(len(outer.state_history), dtype=float)
+    frame_states = np.column_stack(outer.state_history)
+
+    def price_at_frame(station: str):
+        def value(t):
+            index = min(max(int(round(t)), 0), len(outer.price_history) - 1)
+            return outer.price_history[index][station]
+        return value
+
+    frame_prices = {station: price_at_frame(station) for station in net.stations}
+    process_res = {"t": frame_steps, "y": frame_states, "psi_override": frame_prices}
+    post = net.post_process(process_res, psi_override=frame_prices)
 
     return {
         "equilibrium": serialize_equilibrium(net, outer),

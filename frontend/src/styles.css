@@ -142,16 +142,23 @@ h3 { font-size: 13.5px; font-weight: 600; }
 
 .network-shell { height: 560px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); background: var(--panel-2); position: relative; }
 .react-flow__node {
-  border: 1px solid #c9c2b3 !important; color: var(--text); background: #fff !important;
-  border-radius: 4px !important; padding: 5px 9px !important; min-width: 40px !important;
-  text-align: center; font-family: var(--mono); font-size: 11px !important; box-shadow: none !important;
+  width: 56px !important; height: 56px !important; min-width: 56px !important;
+  box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+  border: 2px solid #c9c2b3; color: var(--text); background: #fff;
+  border-radius: 50% !important; padding: 5px !important;
+  text-align: center; font-family: var(--mono); font-size: 10px !important;
+  font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; box-shadow: none !important;
 }
-.react-flow__node.terminal-node { background: #efece4 !important; border-color: #b9b2a2 !important; font-weight: 600; }
+.react-flow__node.origin-node { background: #2563eb; border-color: #1d4ed8; color: #fff; }
+.react-flow__node.destination-node { background: #dc2626; border-color: #b91c1c; color: #fff; }
+.react-flow__node.junction-node { background: #fff; border-color: #9a927f; color: var(--text); }
 .react-flow__node.station-node {
-  background: var(--accent-soft) !important; border: 1.5px solid var(--accent) !important;
-  color: var(--accent); font-weight: 700; border-radius: 999px !important;
+  width: 56px !important; height: 56px !important; min-width: 56px !important;
+  box-shadow: 0 3px 9px rgba(38, 35, 29, .18) !important;
 }
-.react-flow__node.station-node.selected-node { box-shadow: 0 0 0 3px rgba(42,95,91,.25) !important; }
+.react-flow__node.station-node.selected-node {
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, .95), 0 0 0 7px rgba(42, 95, 91, .42), 0 4px 12px rgba(38, 35, 29, .24) !important;
+}
 .react-flow__edge-path { stroke: #9a927f; cursor: pointer; }
 .react-flow__edge.nev-edge .react-flow__edge-path { stroke: var(--nev); stroke-dasharray: 5 4; }
 .react-flow__edge.station-edge .react-flow__edge-path { stroke: var(--accent); }
@@ -169,6 +176,17 @@ h3 { font-size: 13.5px; font-weight: 600; }
 
 .timeline-row { display: grid; grid-template-columns: auto 1fr 46px; align-items: center; gap: 12px; padding-top: 12px; color: var(--muted); font-size: 12px; }
 .timeline-row input { accent-color: var(--accent); }
+
+.csv-toggle { width: 100%; border: 0; background: transparent; padding: 0; color: inherit; }
+.csv-import-body { display: grid; gap: 10px; margin-top: 12px; }
+.csv-import-body > .muted { font-size: 11px; line-height: 1.5; }
+.csv-file { display: grid; gap: 5px; font-size: 11px; color: var(--muted); }
+.csv-file input { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-2); font-size: 11px; }
+.csv-file input::file-selector-button { border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text); padding: 3px 8px 3px 2px; margin-right: 8px; cursor: pointer; }
+.csv-result { border: 1px solid; border-radius: 5px; padding: 8px 9px; font-size: 11px; line-height: 1.45; }
+.csv-result.valid { border-color: #9bc7aa; background: var(--ok-soft); color: #2c5c40; }
+.csv-result.invalid { border-color: #ddb0a7; background: #fbefec; color: #8f3026; }
+.csv-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .timeline-row strong { color: var(--text); text-align: right; font-family: var(--mono); }
 .playback-row { display: flex; gap: 8px; align-items: center; padding-top: 8px; }
 .playback-row button { border: 1px solid var(--border); background: var(--panel-2); border-radius: 4px; padding: 6px 10px; font-size: 12px; }
@@ -190,9 +208,9 @@ h3 { font-size: 13.5px; font-weight: 600; }
 .station-stats b { color: var(--text); font-weight: 600; font-family: var(--mono); }
 
 .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.chart-card { min-height: 320px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 14px; }
+.chart-card { min-height: 350px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 14px; }
 .chart-title-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; flex-wrap: wrap; gap: 6px; }
-.chart-area { height: 250px; }
+.chart-area { height: 280px; }
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   border: 1px solid var(--border); background: var(--panel-2); border-radius: 999px;

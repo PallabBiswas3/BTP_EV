@@ -39,6 +39,23 @@ src/
     export.ts           JSON/CSV download helpers
 ```
 
+## CSV network import
+
+The Network controls panel accepts three CSV files, validates them locally,
+then calls the backend topology validator before enabling the generated JSON
+for simulation.
+
+```text
+roads.csv    required: u,v       optional: classes,l0,L,a
+station.csv  required: u,v,name  optional: classes,mu_s,a_s,c_s,phi0
+ods.csv      required: name,origin,dest,lam,EV,NEV
+```
+
+`classes` uses `|` or `;` as its separator. OD shares may alternatively use
+generic `share_<class>` columns. Empty optional cells inherit the active
+network defaults. On success, the generated network can be loaded directly or
+downloaded as `network.json`.
+
 ## Notes on the design
 
 The original prototype in this repo used a dark, neon "crypto dashboard"

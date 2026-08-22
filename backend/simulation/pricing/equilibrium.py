@@ -118,38 +118,55 @@ def solve_equilibrium(net, psi, y0=None, t_max=800.0, tol=1e-6):
     practical_tol = tol * 100
 
     def _solve(y_start):
-        return solve_ivp(rhs, (0.0, t_max), y_start, method="BDF",
-                          rtol=1e-7, atol=1e-9, max_step=15.0)
+        # Project periodically instead of only at t_max. Replicator dynamics
+        # conserve each OD/class simplex analytically, but a long stiff solve
+        # can drift far enough from it that BDF's step size collapses.
+        state = _renormalize_path_flows(net, y_start)
+        elapsed = 0.0
+        chunk_horizon = 50.0
+        while elapsed < t_max - 1e-12:
+            end = min(t_max, elapsed + chunk_horizon)
+            sol = solve_ivp(
+                rhs, (elapsed, end), state, method="BDF",
+                rtol=1e-7, atol=1e-9, max_step=15.0,
+                jac_sparsity=net.jacobian_sparsity(),
+            )
+            if not sol.success or not sol.y.size or not np.all(np.isfinite(sol.y[:, -1])):
+                return state, False, sol.message, elapsed
+            state = _renormalize_path_flows(net, sol.y[:, -1])
+            elapsed = end
+            if np.linalg.norm(rhs(elapsed, state), ord=1) <= practical_tol:
+                break
+        return state, True, "", elapsed
 
-    def _finalize(sol):
-        state = _renormalize_path_flows(net, sol.y[:, -1])
-        residual = np.linalg.norm(rhs(sol.t[-1], state), ord=1)
+    def _finalize(state, elapsed):
+        residual = np.linalg.norm(rhs(elapsed, state), ord=1)
         converged = bool(residual <= practical_tol)
         msg = "" if converged else (
             f"Residual ||dx/dt||_1={residual:.2e} still above practical "
-            f"tolerance {practical_tol:.1e} at t_max={t_max}."
+            f"tolerance {practical_tol:.1e} after t={elapsed:g} "
+            f"(t_max={t_max})."
         )
         return EquilibriumResult(state, converged=converged, message=msg)
 
     try:
-        sol = _solve(y0)
-        if sol.success and np.all(np.isfinite(sol.y[:, -1])):
-            return _finalize(sol)
+        state, success, _message, elapsed = _solve(y0)
+        if success:
+            return _finalize(state, elapsed)
     except Exception:  # noqa: BLE001 - defensive: never let a bad network
         pass  # config crash the request; fall through to cold retry.
 
     # Cold retry from the canonical initial state, in case the warm start
     # itself was an already-diverged state.
     try:
-        sol = _solve(net.initial_state())
-        finite = np.all(np.isfinite(sol.y[:, -1])) if sol.y.size else False
-        if sol.success and finite:
-            return _finalize(sol)
+        state, success, solver_message, elapsed = _solve(net.initial_state())
+        if success:
+            return _finalize(state, elapsed)
         return EquilibriumResult(
-            np.nan_to_num(sol.y[:, -1], nan=0.0, posinf=1e6, neginf=0.0) if sol.y.size else net.initial_state(),
+            np.nan_to_num(state, nan=0.0, posinf=1e6, neginf=0.0),
             converged=False,
             message=f"Inner system did not settle within t_max={t_max} "
-                    f"(solver: {sol.message}). Treat results as unreliable.",
+                    f"(solver: {solver_message}). Treat results as unreliable.",
         )
     except Exception as exc:  # noqa: BLE001
         return EquilibriumResult(

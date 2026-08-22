@@ -83,7 +83,8 @@ export default function RouteChoice({ trajectory, timeIndex }: Props) {
           <div className="chart-card">
             <div className="chart-title-row"><h3>Path flow</h3><span className="mono muted">{active}</span></div>
             <div className="chart-area">
-              <LineSeriesChart x={trajectory.time} xLabel="time t" yLabel="flow"
+              <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="flow"
+                referenceX={trajectory.time[idx]} referenceLabel="selected"
                 series={groups.get(active)!.map((pid, i) => ({
                   id: pid, label: trajectory.paths[pid].nodes.join('→'), color: colorForIndex(i),
                   values: trajectory.paths[pid].flow,
@@ -93,7 +94,8 @@ export default function RouteChoice({ trajectory, timeIndex }: Props) {
           <div className="chart-card">
             <div className="chart-title-row"><h3>Path cost</h3><span className="mono muted">{active}</span></div>
             <div className="chart-area">
-              <LineSeriesChart x={trajectory.time} xLabel="time t" yLabel="cost"
+              <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="cost"
+                referenceX={trajectory.time[idx]} referenceLabel="selected"
                 series={groups.get(active)!.map((pid, i) => ({
                   id: pid, label: trajectory.paths[pid].nodes.join('→'), color: colorForIndex(i),
                   values: trajectory.paths[pid].cost,
