@@ -13,16 +13,10 @@ documented at the point of change; summary:
    BDF also reaches the same steady state 2-5x faster than RK45, so
    switching to BDF is both a fidelity fix and a performance win.
 
-2. **No convergence *event*.** The original code used a `solve_ivp` event
-   to stop early once ||dx/dt|| < tol (1e-9). Two problems: the event
-   function re-evaluates the RHS on top of what the solver already computed
-   internally, roughly doubling cost per accepted step, and empirically the
-   1e-9 threshold is never reached within any reasonable t_max on these
-   networks (residuals decay slowly rather than hitting a floor), so the
-   event essentially never fires anyway. It's replaced with a plain
-   fixed-horizon integration plus a post-hoc residual check (see
-   `practical_tol` below), which is both faster and matches what actually
-   happens in practice.
+2. **Post-hoc convergence check.** Convergence uses the requested global L1
+   residual criterion, ``sum(abs(dstate/dt)) < 1e-9``.  The RHS is checked
+   between integration chunks (and at the final state) instead of through a
+   `solve_ivp` event, avoiding an extra RHS evaluation at every event probe.
 
 3. **Path-flow renormalization after every solve** -- the fix for a real
    numerical failure mode this refactor uncovered. Eq. 22's replicator
@@ -114,7 +108,7 @@ def _renormalize_path_flows(net, state):
     return state
 
 
-def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
+def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
     """Integrate the closed inner (traffic + routing) system to steady state.
 
     Returns an EquilibriumResult. `converged=False` means the residual
@@ -127,16 +121,12 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
     def rhs(t, state):
         return net.dynamics(t, state, psi_override=psi)
 
-    # A residual within 100x the target tolerance is treated as "practically
-    # converged" for reporting purposes -- see module docstring, point 2.
-    practical_tol = tol * 100
     cached = equilibrium_cache.load_exact(net, psi, tol)
     if cached is not None:
         cached_state, _stored_residual, _stored_conservation, cached_elapsed = cached
-        residual_l1 = np.linalg.norm(rhs(0.0, cached_state), ord=1)
-        residual = residual_l1 / max(1, net.N_STATES) if net.N_STATES > 200 else residual_l1
+        residual = np.linalg.norm(rhs(0.0, cached_state), ord=1)
         conservation = _conservation_error(net, cached_state)
-        if residual <= practical_tol and conservation <= 1e-8:
+        if residual < tol and conservation <= 1e-8:
             return EquilibriumResult(
                 cached_state, converged=True, residual=residual,
                 conservation_error=conservation, elapsed=cached_elapsed,
@@ -182,19 +172,17 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
                 return state, False, sol.message, elapsed
             state = _renormalize_path_flows(net, sol.y[:, -1])
             elapsed = end
-            mean_residual = np.linalg.norm(rhs(elapsed, state), ord=1) / max(1, net.N_STATES)
-            if mean_residual <= practical_tol:
+            residual_l1 = np.linalg.norm(rhs(elapsed, state), ord=1)
+            if residual_l1 < tol:
                 break
         return state, True, "", elapsed
 
     def _finalize(state, elapsed):
-        residual_l1 = np.linalg.norm(rhs(elapsed, state), ord=1)
-        residual = residual_l1 / max(1, net.N_STATES) if net.N_STATES > 200 else residual_l1
-        converged = bool(residual <= practical_tol)
+        residual = np.linalg.norm(rhs(elapsed, state), ord=1)
+        converged = bool(residual < tol)
         msg = "" if converged else (
-            f"Residual {'mean |dx/dt|' if net.N_STATES > 200 else '||dx/dt||_1'}="
-            f"{residual:.2e} still above practical "
-            f"tolerance {practical_tol:.1e} after t={elapsed:g} "
+            f"Residual ||dx/dt||_1={residual:.2e} did not meet "
+            f"the strict tolerance < {tol:.1e} after t={elapsed:g} "
             f"(t_max={t_max})."
         )
         result = EquilibriumResult(
