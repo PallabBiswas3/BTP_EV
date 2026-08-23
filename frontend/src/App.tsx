@@ -290,13 +290,16 @@ export default function App() {
               <div><span>Routes / states</span><strong>{result.equilibrium.quality.path_count} / {result.equilibrium.quality.state_count}</strong></div>
               <div><span>Final residual</span><strong>{result.equilibrium.quality.final_residual.toExponential(2)}</strong></div>
               <div><span>Conservation error</span><strong>{result.equilibrium.quality.conservation_error.toExponential(2)}</strong></div>
-              <div><span>Gradient</span><strong>{result.equilibrium.quality.gradient_method}</strong></div>
+              <div><span>Gradient</span><strong>{result.equilibrium.quality.gradient_method} · {result.equilibrium.quality.gradient_execution === 'process-parallel' ? `${result.equilibrium.quality.gradient_workers} workers` : result.equilibrium.quality.gradient_execution}</strong></div>
               <div><span>Pricing iterations</span><strong>{result.equilibrium.quality.completed_steps} · {result.equilibrium.quality.stop_reason}</strong></div>
               {(result.equilibrium.quality.cache_hit_count > 0 || result.equilibrium.quality.cache_warm_start_count > 0) && (
                 <div className="quality-detail">Cache reused {result.equilibrium.quality.cache_hit_count} exact equilibria and {result.equilibrium.quality.cache_warm_start_count} nearby warm starts.</div>
               )}
+              {result.equilibrium.quality.gradient_execution !== 'process-parallel' && result.equilibrium.quality.gradient_fallback_reason && (
+                <div className="quality-detail">Parallel gradients unavailable: {result.equilibrium.quality.gradient_fallback_reason}.</div>
+              )}
               {!result.equilibrium.quality.outer_converged && (
-                <div className="quality-detail">The projected price update did not remain below {result.equilibrium.quality.outer_tolerance.toExponential(1)} for {result.equilibrium.quality.stable_steps_required} consecutive iterations. Final projected change: {result.equilibrium.quality.last_projected_price_change.toExponential(2)}.</div>
+                <div className="quality-detail">The final price change did not fall below {result.equilibrium.quality.outer_tolerance.toExponential(1)}. Final change: {result.equilibrium.quality.last_price_change.toExponential(2)}.</div>
               )}
               {result.equilibrium.quality.route_limit_hits.length > 0 && (
                 <div className="quality-detail">Route cap reached for {result.equilibrium.quality.route_limit_hits.join(', ')}.</div>
@@ -319,9 +322,11 @@ export default function App() {
                     <h2>Traffic and charging network</h2>
                   </div>
                   <div className="legend">
-                    <span><i className="legend-road" /> Road (EV &amp; NEV)</span>
-                    <span><i className="legend-nev" /> NEV-only road</span>
-                    <span><i className="legend-station" /> Charging access link</span>
+                    <span><i className="legend-origin" /> Origin</span>
+                    <span><i className="legend-destination" /> Destination</span>
+                    <span><i className="legend-road" /> Road</span>
+                    <span><i className="legend-shared" /> Shared station</span>
+                    <span><i className="legend-private" /> Private station</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>

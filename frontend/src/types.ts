@@ -103,6 +103,9 @@ export interface EquilibriumBlock {
     accuracy_mode: 'preview' | 'balanced' | 'research'
     gradient_method: string
     gradient_samples: number
+    gradient_execution: string
+    gradient_workers: number
+    gradient_fallback_reason: string
     effective_kappa: number
     state_count: number
     path_count: number

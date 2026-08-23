@@ -1,12 +1,17 @@
 import { useMemo, useState } from 'react'
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
+  Handle,
   MarkerType,
   Position,
   ReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
+  type NodeProps,
 } from '@xyflow/react'
 
 import type { NetworkConfig, TrajectoryBlock } from '../types'
@@ -30,28 +35,95 @@ interface TooltipState {
   title: string
 }
 
-const PRIVATE_STATION_COLOR = '#16a34a'
-const SHARED_STATION_COLOR = '#9333ea'
+interface CleanEdgeData extends Record<string, unknown> {
+  kind: 'road' | 'station'
+  parallelOffset: number
+  displayLabel?: string
+  labelTone?: 'road' | 'shared' | 'private'
+  road?: NetworkConfig['roads'][number]
+  station?: NetworkConfig['stations'][number]
+  rt?: TrajectoryBlock['roads'][string]
+  st?: TrajectoryBlock['stations'][string]
+  label?: string
+}
+
+const PRIVATE_STATION_COLOR = '#06b6d4'
+const SHARED_STATION_COLOR = '#a855f7'
+
+function isSharedStation(name: string) {
+  const normalized = name.toLowerCase()
+  return normalized.includes('shared') || normalized.startsWith('ssh')
+}
 
 function stationColor(name: string) {
-  return name.toLowerCase().includes('shared') || name.toLowerCase().startsWith('ssh')
-    ? SHARED_STATION_COLOR
-    : PRIVATE_STATION_COLOR
+  return isSharedStation(name) ? SHARED_STATION_COLOR : PRIVATE_STATION_COLOR
 }
 
-function stationPosition(
-  u: { x: number; y: number },
-  v: { x: number; y: number },
-  offset: number,
-) {
-  const dx = v.x - u.x
-  const dy = v.y - u.y
-  const length = Math.hypot(dx, dy) || 1
-  return {
-    x: (u.x + v.x) / 2 - (dy / length) * offset,
-    y: (u.y + v.y) / 2 + (dx / length) * offset,
-  }
+function pairKey(u: string, v: string) {
+  return u < v ? `${u}|${v}` : `${v}|${u}`
 }
+
+function CleanEdge({
+  id, sourceX, sourceY, targetX, targetY, style, data, markerEnd,
+}: EdgeProps) {
+  const edgeData = data as CleanEdgeData | undefined
+  const dx = targetX - sourceX
+  const dy = targetY - sourceY
+  const length = Math.hypot(dx, dy) || 1
+  const offset = edgeData?.parallelOffset ?? 0
+  const ox = (-dy / length) * offset
+  const oy = (dx / length) * offset
+  const sx = sourceX + ox
+  const sy = sourceY + oy
+  const tx = targetX + ox
+  const ty = targetY + oy
+  const path = `M ${sx},${sy} L ${tx},${ty}`
+
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        style={style}
+        markerEnd={markerEnd}
+        interactionWidth={18}
+      />
+      {edgeData?.displayLabel && (
+        <EdgeLabelRenderer>
+          <div
+            className={`clean-edge-label ${edgeData.labelTone ?? ''}`}
+            style={{
+              transform: `translate(-50%, -50%) translate(${(sx + tx) / 2}px,${(sy + ty) / 2}px)`,
+            }}
+          >
+            {edgeData.displayLabel}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  )
+}
+
+const edgeTypes = { clean: CleanEdge }
+
+function CleanNode({ data }: NodeProps) {
+  const label = String((data as { label?: unknown }).label ?? '')
+  return (
+    <>
+      <span>{label}</span>
+      <Handle type="source" position={Position.Top} id="source-top" />
+      <Handle type="source" position={Position.Right} id="source-right" />
+      <Handle type="source" position={Position.Bottom} id="source-bottom" />
+      <Handle type="source" position={Position.Left} id="source-left" />
+      <Handle type="target" position={Position.Top} id="target-top" />
+      <Handle type="target" position={Position.Right} id="target-right" />
+      <Handle type="target" position={Position.Bottom} id="target-bottom" />
+      <Handle type="target" position={Position.Left} id="target-left" />
+    </>
+  )
+}
+
+const nodeTypes = { clean: CleanNode }
 
 export default function NetworkGraph({
   network,
@@ -62,329 +134,172 @@ export default function NetworkGraph({
   onSelectStation,
 }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
-
   const layout = useMemo(() => computeLayout(network), [network])
 
-  /*
-   * --------------------------------------------------------------------------
-   * Nodes
-   * --------------------------------------------------------------------------
-   */
-  const nodes: Node[] = useMemo(() => {
-    const out: Node[] = []
-
-    // Normal road-network nodes
-    layout.forEach((pos, id) => {
+  const nodes: Node[] = useMemo(() => (
+    [...layout.entries()].map(([id, pos]) => {
       const isOrigin = network.ods.some((od) => od.origin === id)
       const isDestination = network.ods.some((od) => od.dest === id)
-
-      out.push({
+      return {
         id,
-        position: {
-          x: pos.x,
-          y: pos.y,
-        },
-        data: {
-          label: id,
-        },
+        type: 'clean',
+        position: { x: pos.x, y: pos.y },
+        data: { label: id },
         className: isOrigin
           ? 'origin-node'
           : isDestination
             ? 'destination-node'
             : 'junction-node',
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
         draggable: false,
-      })
+      }
     })
+  ), [layout, network.ods])
 
-    // Charging-station nodes
-    network.stations.forEach((station, index) => {
-      const u = layout.get(station.u)
-      const v = layout.get(station.v)
-
-      if (!u || !v) return
-
-      const color = stationColor(station.name)
-
-      out.push({
-        id: `station:${station.name}`,
-        position: stationPosition(
-          u,
-          v,
-          index % 2 === 0 ? -46 : 46,
-        ),
-        data: {
-          label: station.name,
-        },
-        className: `station-node${
-          color === SHARED_STATION_COLOR ? ' shared-station-node' : ' private-station-node'
-        }${
-          selectedStation === station.name ? ' selected-node' : ''
-        }`,
-
-        // Every station gets its own chart-consistent color.
-        style: {
-          background: color,
-          border: `2px solid ${color}`,
-          color: '#ffffff',
-        },
-
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
-
-        draggable: false,
-      })
-    })
-
-    return out
-  }, [layout, network, selectedStation])
-
-  /*
-   * --------------------------------------------------------------------------
-   * Edges
-   * --------------------------------------------------------------------------
-   */
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = []
+    const idx = trajectory ? Math.min(timeIndex, trajectory.time.length - 1) : -1
+    const roadCounts = new Map<string, number>()
+    const roadSeen = new Map<string, number>()
+    network.roads.forEach((road) => {
+      const key = pairKey(road.u, road.v)
+      roadCounts.set(key, (roadCounts.get(key) ?? 0) + 1)
+    })
+    const stationSeen = new Map<string, number>()
+    const handles = (u: string, v: string) => {
+      const source = layout.get(u)
+      const target = layout.get(v)
+      if (!source || !target) return {}
+      const dx = target.x - source.x
+      const dy = target.y - source.y
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        return dx >= 0
+          ? { sourceHandle: 'source-right', targetHandle: 'target-left' }
+          : { sourceHandle: 'source-left', targetHandle: 'target-right' }
+      }
+      return dy >= 0
+        ? { sourceHandle: 'source-bottom', targetHandle: 'target-top' }
+        : { sourceHandle: 'source-top', targetHandle: 'target-bottom' }
+    }
 
-    const idx = trajectory
-      ? Math.min(timeIndex, trajectory.time.length - 1)
-      : -1
-
-    /*
-     * ------------------------------------------------------------------------
-     * Road edges
-     * ------------------------------------------------------------------------
-     */
     network.roads.forEach((road, i) => {
       const label = `${road.u}->${road.v}`
-
       const rt = trajectory?.roads[label]
-
-      const isNevOnly =
-        road.classes && !road.classes.includes('EV')
-
-      // Arrow color distinguishes NEV-only roads from normal roads.
-      const arrowColor = isNevOnly ? '#9c8256' : '#9a927f'
-
+      const isNevOnly = Boolean(road.classes && !road.classes.includes('EV'))
       let intensity = 0
-      let valueLabel = 'x 0.00'
+      const xValue = rt && idx >= 0 ? (rt.total_density[idx] ?? 0) : 0
 
       if (rt && idx >= 0) {
-        const capRatio = rt.capacity_ratio[idx] ?? 0
-        const lat = rt.latency[idx] ?? 0
-
         if (mode === 'ev') {
-          intensity = Math.min(
-            1,
-            (rt.ev_density[idx] ?? 0) /
-              (rt.capacity_L || 1),
-          )
-
-          valueLabel = `EV ${(rt.ev_density[idx] ?? 0).toFixed(2)}`
+          intensity = Math.min(1, (rt.ev_density[idx] ?? 0) / (rt.capacity_L || 1))
         } else if (mode === 'nev') {
-          intensity = Math.min(
-            1,
-            (rt.nev_density[idx] ?? 0) /
-              (rt.capacity_L || 1),
-          )
-
-          valueLabel = `NEV ${(rt.nev_density[idx] ?? 0).toFixed(2)}`
+          intensity = Math.min(1, (rt.nev_density[idx] ?? 0) / (rt.capacity_L || 1))
         } else if (mode === 'latency') {
-          intensity = Math.min(1, lat / 2)
-
-          valueLabel = `φ ${lat.toFixed(2)}`
+          intensity = Math.min(1, (rt.latency[idx] ?? 0) / 2)
         } else {
-          intensity = capRatio
-
-          valueLabel = `x ${(rt.total_density[idx] ?? 0).toFixed(2)}`
+          intensity = Math.min(1, rt.capacity_ratio[idx] ?? 0)
         }
       }
+
+      const key = pairKey(road.u, road.v)
+      const seen = roadSeen.get(key) ?? 0
+      const count = roadCounts.get(key) ?? 1
+      roadSeen.set(key, seen + 1)
 
       out.push({
         id: `road:${i}:${label}`,
         source: road.u,
         target: road.v,
-
-        type: 'default',
-
-        // Heavily loaded roads appear animated.
-        animated: intensity > 0.5,
-
-        label: valueLabel,
-
-        className: isNevOnly
-          ? 'nev-edge'
-          : undefined,
-
+        ...handles(road.u, road.v),
+        type: 'clean',
+        className: isNevOnly ? 'nev-edge' : 'road-edge',
+        animated: intensity > 0.72,
         style: {
-          // Congestion / density controls line thickness.
-          strokeWidth: 1.6 + intensity * 6,
-          opacity: 0.55 + intensity * 0.45,
+          stroke: isNevOnly ? '#9c8256' : '#8b8b87',
+          strokeWidth: 1.35 + intensity * 4.5,
+          opacity: 0.72 + intensity * 0.28,
         },
-
-        // Directional road arrow.
-        // Arrow size grows with congestion intensity.
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: arrowColor,
-          width: 14 + intensity * 12,
-          height: 14 + intensity * 12,
+          color: isNevOnly ? '#9c8256' : '#686864',
+          width: 12 + intensity * 9,
+          height: 12 + intensity * 9,
         },
-
         data: {
           kind: 'road',
           label,
           road,
           rt,
-        },
+          displayLabel: `x ${xValue.toFixed(2)}`,
+          labelTone: 'road',
+          parallelOffset: (seen - (count - 1) / 2) * 7,
+        } satisfies CleanEdgeData,
       })
     })
 
-    /*
-     * ------------------------------------------------------------------------
-     * Station access-link edges
-     * ------------------------------------------------------------------------
-     */
     network.stations.forEach((station, i) => {
-      const sid = `station:${station.name}`
-
-      const st =
-        trajectory?.stations[station.name]
-
-      const occ =
-        st && idx >= 0
-          ? st.occupancy[idx]
-          : undefined
-
-      const K = st?.saturation_K
-
-      /*
-       * Occupancy ratio controls access-link thickness.
-       *
-       * intensity = 0 → empty / uncongested
-       * intensity = 1 → occupancy reaches saturation capacity
-       */
-      const intensity =
-        occ !== undefined && K
-          ? Math.min(1, occ / K)
-          : 0
-
-      const over =
-        occ !== undefined &&
-        K !== undefined &&
-        occ > K
-      const stationValueLabel = `x ${(occ ?? 0).toFixed(2)}`
-
+      const st = trajectory?.stations[station.name]
+      const occupancy = st && idx >= 0 ? st.occupancy[idx] : undefined
+      const saturation = st?.saturation_K
+      const intensity = occupancy !== undefined && saturation
+        ? Math.min(1, occupancy / saturation)
+        : 0
+      const key = pairKey(station.u, station.v)
+      const stationIndex = stationSeen.get(key) ?? 0
+      stationSeen.set(key, stationIndex + 1)
+      const roadCount = roadCounts.get(key) ?? 0
+      const selected = selectedStation === station.name
       const color = stationColor(station.name)
 
-      const common = {
-        type: 'default' as const,
-
-        animated: true,
-
-        className: `station-edge${
-          over ? ' selected-edge' : ''
-        }`,
-
+      out.push({
+        id: `station:${i}:${station.name}`,
+        source: station.u,
+        target: station.v,
+        ...handles(station.u, station.v),
+        type: 'clean',
+        className: `station-edge ${isSharedStation(station.name) ? 'shared-station-edge' : 'private-station-edge'}${selected ? ' selected-edge' : ''}`,
+        animated: intensity > 0.8,
         style: {
           stroke: color,
-          strokeWidth: 1.6 + intensity * 6,
+          strokeWidth: (selected ? 4.5 : 2.8) + intensity * 2.4,
+          opacity: 1,
         },
-
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color,
-          width: 14 + intensity * 12,
-          height: 14 + intensity * 12,
+          width: 14 + intensity * 9,
+          height: 14 + intensity * 9,
         },
-      }
-
-      /*
-       * Road node → charging station
-       */
-      out.push({
-        id: `station-in:${i}`,
-        source: station.u,
-        target: sid,
-        label: stationValueLabel,
-
         data: {
           kind: 'station',
           station,
           st,
-        },
-
-        ...common,
-      })
-
-      /*
-       * Charging station → road node
-       */
-      out.push({
-        id: `station-out:${i}`,
-        source: sid,
-        target: station.v,
-
-        data: {
-          kind: 'station',
-          station,
-          st,
-        },
-
-        ...common,
+          displayLabel: `${station.name} · x ${(occupancy ?? 0).toFixed(2)}`,
+          labelTone: isSharedStation(station.name) ? 'shared' : 'private',
+          parallelOffset: (roadCount > 0 ? 11 : 0) + stationIndex * 8,
+        } satisfies CleanEdgeData,
       })
     })
 
     return out
-  }, [network, trajectory, timeIndex, mode])
+  }, [network, trajectory, timeIndex, mode, selectedStation, layout])
 
-  /*
-   * --------------------------------------------------------------------------
-   * Tooltip handling
-   * --------------------------------------------------------------------------
-   */
-  const showTooltip = (
-    e: React.MouseEvent,
-    edge: Edge,
-  ) => {
-    const rect = (
-      e.target as HTMLElement
-    )
+  const showTooltip = (event: React.MouseEvent, edge: Edge) => {
+    const rect = (event.target as HTMLElement)
       .closest('.network-shell')
       ?.getBoundingClientRect()
+    const x = rect ? event.clientX - rect.left + 12 : event.clientX
+    const y = rect ? event.clientY - rect.top + 12 : event.clientY
+    const data = edge.data as CleanEdgeData | undefined
+    const idx = trajectory ? Math.min(timeIndex, trajectory.time.length - 1) : -1
 
-    const x = rect
-      ? e.clientX - rect.left + 12
-      : e.clientX
-
-    const y = rect
-      ? e.clientY - rect.top + 12
-      : e.clientY
-
-    const d = edge.data as any
-
-    /*
-     * Road tooltip
-     */
-    if (d?.kind === 'road') {
-      const r = d.road
-      const rt = d.rt
-
-      const idx = trajectory
-        ? Math.min(
-            timeIndex,
-            trajectory.time.length - 1,
-          )
-        : -1
-
+    if (data?.kind === 'road' && data.road) {
+      const road = data.road
+      const rt = data.rt
       const lines = [
-        `${r.u} -> ${r.v}`,
-        `classes: ${(r.classes ?? network.classes).join(', ')}`,
-        `capacity L: ${(r.L ?? network.defaults.L).toFixed(2)}`,
+        `${road.u} → ${road.v}`,
+        `classes: ${(road.classes ?? network.classes).join(', ')}`,
+        `capacity L: ${(road.L ?? network.defaults.L).toFixed(2)}`,
       ]
-
       if (rt && idx >= 0) {
         lines.push(
           `EV density: ${(rt.ev_density[idx] ?? 0).toFixed(3)}`,
@@ -393,33 +308,11 @@ export default function NetworkGraph({
           `x/L: ${(rt.capacity_ratio[idx] ?? 0).toFixed(2)}`,
         )
       }
-
-      setTooltip({
-        x,
-        y,
-        title: `Road ${d.label}`,
-        lines,
-      })
-    }
-
-    /*
-     * Station tooltip
-     */
-    else if (d?.kind === 'station') {
-      const s = d.station
-      const st = d.st
-
-      const idx = trajectory
-        ? Math.min(
-            timeIndex,
-            trajectory.time.length - 1,
-          )
-        : -1
-
-      const lines = [
-        `u->v: ${s.u} -> ${s.v}`,
-      ]
-
+      setTooltip({ x, y, title: `Road ${data.label}`, lines })
+    } else if (data?.kind === 'station' && data.station) {
+      const station = data.station
+      const st = data.st
+      const lines = [`link: ${station.u} → ${station.v}`]
       if (st && idx >= 0) {
         lines.push(
           `price ψ: ${(st.price[idx] ?? 0).toFixed(3)}`,
@@ -428,102 +321,40 @@ export default function NetworkGraph({
           `throughput ρ: ${(st.throughput[idx] ?? 0).toFixed(3)}`,
         )
       }
-
-      setTooltip({
-        x,
-        y,
-        title: `Station ${s.name}`,
-        lines,
-      })
+      setTooltip({ x, y, title: `Station ${station.name}`, lines })
     }
   }
 
-  /*
-   * --------------------------------------------------------------------------
-   * Rendering
-   * --------------------------------------------------------------------------
-   */
   return (
     <div className="network-shell">
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         fitView
-        minZoom={0.3}
-        maxZoom={1.8}
-        proOptions={{
-          hideAttribution: true,
-        }}
-
-        onEdgeMouseEnter={(e, edge) =>
-          showTooltip(e, edge)
-        }
-
-        onEdgeMouseMove={(e, edge) =>
-          showTooltip(e, edge)
-        }
-
-        onEdgeMouseLeave={() =>
-          setTooltip(null)
-        }
-
+        fitViewOptions={{ padding: 0.12 }}
+        minZoom={0.25}
+        maxZoom={2}
+        proOptions={{ hideAttribution: true }}
+        onEdgeMouseEnter={showTooltip}
+        onEdgeMouseMove={showTooltip}
+        onEdgeMouseLeave={() => setTooltip(null)}
         onEdgeClick={(_, edge) => {
-          const d = edge.data as any
-
-          if (d?.kind === 'station') {
-            onSelectStation(
-              d.station.name === selectedStation
-                ? null
-                : d.station.name,
-            )
-          }
-        }}
-
-        onNodeClick={(_, node) => {
-          if (
-            node.id.startsWith('station:')
-          ) {
-            const name =
-              node.id.slice(
-                'station:'.length,
-              )
-
-            onSelectStation(
-              name === selectedStation
-                ? null
-                : name,
-            )
+          const data = edge.data as CleanEdgeData | undefined
+          if (data?.kind === 'station' && data.station) {
+            onSelectStation(data.station.name === selectedStation ? null : data.station.name)
           }
         }}
       >
-        <Background
-          gap={22}
-          size={1}
-          color="#e2ded3"
-        />
-
-        <Controls
-          showInteractive={false}
-        />
+        <Background gap={24} size={0.7} color="#e7e4dc" />
+        <Controls showInteractive={false} />
       </ReactFlow>
 
       {tooltip && (
-        <div
-          className="graph-tooltip"
-          style={{
-            left: tooltip.x,
-            top: tooltip.y,
-          }}
-        >
+        <div className="graph-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>
           <b>{tooltip.title}</b>
-
-          {tooltip.lines.map(
-            (line, i) => (
-              <div key={i}>
-                {line}
-              </div>
-            ),
-          )}
+          {tooltip.lines.map((line, i) => <div key={i}>{line}</div>)}
         </div>
       )}
     </div>

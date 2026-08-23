@@ -271,6 +271,43 @@ class ChargingNetwork:
         self.game_groups = {k: v for k, v in self.groups.items() if len(v) > 1}
         self.path_state_keys = [pid for pids in self.game_groups.values() for pid in pids]
 
+        # Path costs are evaluated at every ODE right-hand-side call.  The
+        # previous implementation recomputed a link's latency/cost once for
+        # every path containing it, even though that value is identical for
+        # all paths at a given (t, state).  Build a path-link incidence matrix
+        # once so each unique link cost can be evaluated once and distributed
+        # to all paths with a sparse matrix-vector product.
+        #
+        # Keep links in first-use order and keep each row's column indices in
+        # path traversal order.  Besides making the structure deterministic,
+        # this retains the old summation order as closely as SciPy's sparse
+        # matrix-vector kernel permits.  Raw CSR construction also preserves
+        # duplicate edge occurrences should a future path generator allow
+        # them.
+        self._path_cost_ids = tuple(self.path_edges)
+        cost_edges = []
+        cost_edge_index = {}
+        incidence_indices = []
+        incidence_indptr = [0]
+        for pid in self._path_cost_ids:
+            for edge in self.path_edges[pid]:
+                idx = cost_edge_index.get(edge)
+                if idx is None:
+                    idx = len(cost_edges)
+                    cost_edge_index[edge] = idx
+                    cost_edges.append(edge)
+                incidence_indices.append(idx)
+            incidence_indptr.append(len(incidence_indices))
+        self._path_cost_edges = tuple(cost_edges)
+        self._path_cost_incidence = sp.csr_matrix(
+            (
+                np.ones(len(incidence_indices), dtype=float),
+                np.asarray(incidence_indices, dtype=np.int32),
+                np.asarray(incidence_indptr, dtype=np.int32),
+            ),
+            shape=(len(self._path_cost_ids), len(self._path_cost_edges)),
+        )
+
         # Roads/stations that exist in the topology but carry no feasible-path
         # traffic (e.g. an isolated NEV-only link nobody uses) still deserve
         # to be reported to the frontend for a complete network picture, so we
@@ -458,21 +495,24 @@ class ChargingNetwork:
 
     def _path_costs(self, d, t, psi_override):
         G, p = self.G, self.defaults
-        cost = {}
-        for pid, edges in self.path_edges.items():
-            total = 0.0
-            for e in edges:
-                attrs = G.edges[e]
-                if attrs["kind"] == "road":
-                    xtot = sum(d["xr"].get((e, cc), 0.0) for cc in self.classes)
-                    total += latency(xtot, attrs["l0"], attrs["L"], attrs["a"])
-                else:
-                    psi_val = self._get_psi(e, t, psi_override)
-                    Ks = attrs["mu_s"] / attrs["a_s"]
-                    total += station_cost(d["xs"][e], psi_val, attrs["phi0"],
-                                           p["alpha"], p["gamma"], Ks, attrs["mu_s"])
-            cost[pid] = total
-        return cost
+        link_costs = np.empty(len(self._path_cost_edges), dtype=float)
+        for idx, e in enumerate(self._path_cost_edges):
+            attrs = G.edges[e]
+            if attrs["kind"] == "road":
+                xtot = sum(d["xr"].get((e, cc), 0.0) for cc in self.classes)
+                link_costs[idx] = latency(
+                    xtot, attrs["l0"], attrs["L"], attrs["a"],
+                )
+            else:
+                psi_val = self._get_psi(e, t, psi_override)
+                Ks = attrs["mu_s"] / attrs["a_s"]
+                link_costs[idx] = station_cost(
+                    d["xs"][e], psi_val, attrs["phi0"], p["alpha"],
+                    p["gamma"], Ks, attrs["mu_s"],
+                )
+
+        totals = self._path_cost_incidence.dot(link_costs)
+        return dict(zip(self._path_cost_ids, totals))
 
     def simulate(self, t_end, pts_per_unit=4.0, psi_override=None,
                  method="RK45", rtol=1e-9, atol=1e-11, y0=None):

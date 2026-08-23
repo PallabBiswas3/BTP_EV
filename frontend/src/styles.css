@@ -160,36 +160,41 @@ h3 { font-size: 13.5px; font-weight: 600; }
 .legend { display: flex; gap: 14px; color: var(--muted); font-size: 11px; flex-wrap: wrap; }
 .legend span { display: flex; gap: 5px; align-items: center; }
 .legend i { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
-.legend-road { background: #9a927f; }
+.legend-road { background: #8b8b87; }
 .legend-nev { background: var(--nev); }
-.legend-station { background: var(--accent); }
+.legend-origin { width: 12px !important; height: 12px !important; border-radius: 50% !important; background: #4caf50; border: 1px solid #246b2a; }
+.legend-destination { width: 12px !important; height: 12px !important; border-radius: 50% !important; background: #ff7043; border: 1px solid #a83218; }
+.legend-shared { height: 4px !important; background: #a855f7; }
+.legend-private { height: 4px !important; background: #06b6d4; }
 
-.network-shell { height: 560px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); background: var(--panel-2); position: relative; }
+.network-shell { height: 620px; border-radius: 5px; overflow: hidden; border: 1px solid var(--border); background: #fbfbfa; position: relative; }
 .react-flow__node {
-  width: 56px !important; height: 56px !important; min-width: 56px !important;
+  width: 42px !important; height: 42px !important; min-width: 42px !important;
   box-sizing: border-box; display: flex; align-items: center; justify-content: center;
-  border: 2px solid #c9c2b3; color: var(--text); background: #fff;
-  border-radius: 50% !important; padding: 5px !important;
+  border: 1.5px solid #292929; color: #171717; background: #fff;
+  border-radius: 50% !important; padding: 4px !important;
   text-align: center; font-family: var(--mono); font-size: 10px !important;
-  font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; box-shadow: none !important;
+  font-weight: 700; line-height: 1.1; overflow-wrap: anywhere; box-shadow: 0 1px 2px rgba(0,0,0,.08) !important;
 }
-.react-flow__node.origin-node { background: #2563eb; border-color: #1d4ed8; color: #fff; }
-.react-flow__node.destination-node { background: #dc2626; border-color: #b91c1c; color: #fff; }
-.react-flow__node.junction-node { background: #fff; border-color: #9a927f; color: var(--text); }
-.react-flow__node.station-node {
-  width: 56px !important; height: 56px !important; min-width: 56px !important;
-  box-shadow: 0 3px 9px rgba(38, 35, 29, .18) !important;
-}
-.react-flow__node.station-node.selected-node {
-  box-shadow: 0 0 0 4px rgba(255, 255, 255, .95), 0 0 0 7px rgba(42, 95, 91, .42), 0 4px 12px rgba(38, 35, 29, .24) !important;
-}
-.react-flow__edge-path { stroke: #9a927f; cursor: pointer; }
+.react-flow__node.origin-node { background: #4caf50; border-color: #246b2a; color: #102c13; }
+.react-flow__node.destination-node { background: #ff7043; border-color: #a83218; color: #3b1008; }
+.react-flow__node.junction-node { background: #fff; border-color: #292929; color: #171717; }
+.react-flow__handle { width: 1px !important; height: 1px !important; min-width: 1px !important; min-height: 1px !important; opacity: 0; border: 0; pointer-events: none; }
+.react-flow__edge-path { stroke: #8b8b87; cursor: pointer; }
 .react-flow__edge.nev-edge .react-flow__edge-path { stroke: var(--nev); stroke-dasharray: 5 4; }
-.react-flow__edge.station-edge .react-flow__edge-path { stroke: var(--accent); }
-.react-flow__edge.selected-edge .react-flow__edge-path { stroke: #c15b3f !important; stroke-width: 3.5 !important; }
+.react-flow__edge.station-edge .react-flow__edge-path { cursor: pointer; }
+.react-flow__edge.selected-edge .react-flow__edge-path { filter: drop-shadow(0 0 3px rgba(28, 25, 23, .55)); }
 .react-flow__edge-text { fill: var(--text); font-size: 9px; font-family: var(--mono); }
 .react-flow__edge-textbg { fill: var(--panel-2); }
 .react-flow__attribution { display: none; }
+.clean-edge-label {
+  position: absolute; padding: 1px 4px; border: 1px solid currentColor;
+  border-radius: 2px; background: rgba(255,255,255,.94); font: 700 9px/1.25 var(--mono);
+  white-space: nowrap; pointer-events: none; box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
+.clean-edge-label.shared { color: #9333ea; }
+.clean-edge-label.private { color: #0891b2; }
+.clean-edge-label.road { color: #575752; border-color: #c9c7bf; font-weight: 600; }
 
 .graph-tooltip {
   position: absolute; z-index: 20; background: var(--text); color: #f6f5f1; border-radius: 5px;

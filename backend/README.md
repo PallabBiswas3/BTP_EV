@@ -88,7 +88,7 @@ values the paper reports, only how fast and how reliably they're reached.
 bounded class-feasible path generation, and a cached sparse-Jacobian pattern.
 These changes are documented below and in the module docstrings.
 
-## Large-network equilibrium approach
+## Unified optimized equilibrium approach
 
 ### Persistent reuse and caching
 
@@ -112,32 +112,30 @@ reused. Set `EVCS_CACHE_PATH` to relocate the SQLite file.
 
 Simulation requests expose an `accuracy_mode` with three explicit trade-offs:
 
-| Profile | Maximum routes per OD/class | Inner horizons (cold/warm) | Price gradient |
+| Profile | Maximum routes per OD/class | Inner horizon | Price gradient |
 |---|---:|---:|---|
-| `preview` | 8 | 200 / 50 | simultaneous perturbation on large models |
-| `balanced` | 16 | 500 / 150 | simultaneous perturbation on large models |
-| `research` | 32 | 1000 / 300 | exact coordinate central differences |
+| `preview` | 8 | up to 1000 | coordinate central differences |
+| `balanced` | 16 | up to 1000 | coordinate central differences |
+| `research` | 32 | up to 1000 | coordinate central differences |
 
 `preview` is the default because large Research runs can take minutes per
 pricing step. Use `research` for final reported results and run it as a
 background/offline calculation; the API continues to publish job progress.
 
-Small paper networks continue to use the calibrated 1000-unit horizon and
-coordinate central differences in every profile. `research` is the strictest
-available numerical estimate, but it is not labeled exact merely because it
-ran longer: the response includes a quality block with route-cap hits, inner
-residuals, path-flow conservation error, gradient method, and a `certified`
-flag. A run is certified only when every nominal and gradient-perturbation
-solve meets tolerance, no OD/class group reaches an internal candidate-route
-cap, and the final outer-loop price change is at most `1e-4`.
+Profiles now differ only in their candidate-route budgets. Every network and
+profile uses a chunked inner solve of up to 1000 time units and coordinate
+central differences. The inner solve stops early when the global L1 derivative
+norm is below `1e-9`. `research` remains the strictest route-set estimate. The
+response includes a quality block with route-cap hits,
+inner residuals, path-flow conservation error, gradient method, and a
+`certified` flag. A run is certified only when every nominal and
+gradient-perturbation solve meets tolerance, no OD/class group reaches an
+internal candidate-route cap, and the final outer-loop price change is at most
+`1e-4`.
 
-For models above 200 states, `n_steps` is a minimum rather than a hard stop.
-After that many iterations, pricing continues until the maximum station-price
-change is at most `outer_tolerance` for `stable_outer_steps` consecutive fully
-converged iterations. `max_outer_steps` is the required safety limit for a
-network that never settles. The defaults are `1e-4`, 3, and 120 respectively,
-and all three are editable in Solver settings. Small and paper networks retain
-exactly `n_steps` iterations.
+For every network, `n_steps` is the exact outer-loop iteration count. The
+`outer_tolerance` value still determines whether the completed run is labeled
+outer-converged, but it does not stop or extend the fixed iteration loop.
 
 The original builder enumerated every simple path for every OD pair and
 vehicle class. That works for the small paper topology, but path counts grow
@@ -145,7 +143,7 @@ combinatorially on cyclic road networks. The bundled 24-node, 76-road,
 6-station network has approximately 66,512 EV paths and 20,759 NEV paths
 under unrestricted enumeration, producing roughly 87,000 route-flow states.
 
-The backend uses the following large-network strategy.
+The backend now uses the following strategy for every network size.
 
 ### 1. Bounded, class-feasible route sets
 
@@ -184,17 +182,23 @@ as `jac_sparsity`. Network ODEs are sparse because a state interacts mainly
 with nearby edges and paths in its OD/class group. Supplying this structure
 avoids dense finite-difference Jacobian work on every solve.
 
+Path costs are also compiled into a sparse path-link incidence matrix when the
+network is built. During every ODE evaluation, each unique road/station cost is
+computed once and all path costs are obtained with one sparse matrix-vector
+product instead of recomputing a road latency for every path that uses it.
+
 ### 3. Chunked integration and route-flow projection
 
 Replicator dynamics analytically preserve
 `sum(path flows) = OD/class demand`, but a long numerical solve can drift away
 from that simplex and eventually make BDF fail with a required-step-size error.
 
-`solve_equilibrium()` therefore integrates in 50-time-unit chunks. After each
-chunk it clips negative path flows, renormalizes every OD/class group to its
-known demand, and checks the equilibrium residual. It stops early when the
-practical tolerance is reached. A failed warm start is retried from the
-canonical initial state.
+`solve_equilibrium()` advances BDF in 50-time-unit chunks until the global L1
+derivative norm is below `1e-9` or the requested maximum horizon is reached.
+After every chunk it clips negative path flows and renormalizes every OD/class
+group to its known demand, then re-evaluates the residual. A finite late BDF
+failure resumes locally from its projected endpoint instead of discarding all
+progress and repeating the full cold solve.
 
 ### 4. Warm-started pricing continuation
 
@@ -202,56 +206,34 @@ The first pricing solve is cold-started. Every later nominal and perturbed
 solve starts from the preceding equilibrium estimate because consecutive
 price profiles are close.
 
-- Small and paper networks use the paper's calibrated 1000-unit horizon for
-  every nominal and price-perturbation solve.
-- Models with more than 200 states use the profile's cold horizon.
-- Warm continuation and perturbation solves use the profile's warm horizon.
+- Every cold, continuation, and perturbation solve uses the same configured
+  maximum horizon (1000 time units by default) and L1 terminal event.
 
-The shorter large-network horizons avoid spending most of the request driving
-tiny route shares toward a numerically stiff boundary before prices adapt.
 Residual warnings remain visible in the API response and frontend.
 
-### 5. Adaptive price-gradient estimation
+### 5. Coordinate price-gradient estimation
 
-Small and paper networks retain the original coordinate-wise central
-difference, which costs `2S` perturbed solves for `S` stations per pricing
-iteration.
-
-In Preview and Balanced, models with more than 200 states and more than three
-stations use averaged simultaneous central perturbations (SPSA-style
-estimates). Preview averages two independent directions and Balanced averages
-four. Each Rademacher direction perturbs every station price up and down:
-
-```text
-psi_plus  = psi + delta * direction
-psi_minus = psi - delta * direction
-
-gradient_s ~= (profit_s(psi_plus) - profit_s(psi_minus))
-              / (psi_plus_s - psi_minus_s)
-```
-
-The averaged gradient is exponentially smoothed (`0.75` previous plus `0.25`
-new), and its gain follows `kappa / (k + 1)^0.602`; the perturbation follows
-`delta / (k + 1)^0.101`. These standard diminishing SPSA schedules remove the
-persistent fluctuation caused by a one-sample estimate with constant gain.
-Research mode deliberately pays for the original coordinate-wise `2S`
-perturbation solves. Price bounds and gradient clipping are still applied.
-Convergence is checked against the projected update at the original full
-`kappa`, not the diminished gain, so gain decay cannot create a false
-convergence result.
+Every network and accuracy profile uses the original station-by-station
+central difference. Each pricing iteration requires `2S` perturbed equilibrium
+solves for `S` stations. These independent solves run concurrently in a bounded
+process pool while their results are consumed in the original deterministic
+station order. Price bounds and gradient clipping remain applied. Set
+`EVCS_GRADIENT_WORKERS` to choose the worker limit (default 4), or set
+`EVCS_PARALLEL_GRADIENTS=0` to force serial execution. Unsupported custom
+time-varying demand callables automatically fall back to serial execution.
 
 ### Accuracy and measured performance
 
-Large-network mode computes a practical equilibrium estimate over a bounded,
+Every mode computes an equilibrium estimate over a profile-bounded,
 representative route set. It is not an exhaustive all-simple-path solution,
-which is unsuitable for an interactive service. Small and paper networks keep
-their complete route sets and coordinate-wise gradients.
-
-The stabilized Preview estimator now performs four perturbed solves per
-pricing iteration (two averaged central directions), so measurements from the
-former one-direction implementation are not comparable. Actual runtime
-depends on CPU, solver tolerances, topology, demand, and the number of pricing
-steps. Use the job progress response rather than assuming a fixed duration.
+which is unsuitable for an interactive service. Research mode uses the
+largest route budget. Runtime depends on CPU, solver tolerances, topology,
+demand, station count, worker count, and the number of pricing steps. On the
+development machine, the 212-state Preview model's RHS became about 3x faster,
+a formerly failing 1000-unit inner solve fell from 52.15 seconds to 3.61
+seconds, and a one-step four-worker coordinate-gradient benchmark was 2.26x
+faster than serial with identical prices and final state. Use job progress
+rather than assuming a fixed duration on other machines.
 
 ## Running tests / a quick smoke check
 
@@ -273,3 +255,6 @@ curl localhost:8000/api/scenarios
   a job submitted to worker A is invisible to a status poll that lands on
   worker B. Don't raise this above 1 unless you first swap `jobs.py` for a
   shared store — e.g. Redis, or even just SQLite — that all workers can see.)
+- `EVCS_GRADIENT_WORKERS` — maximum coordinate-gradient worker processes
+  (default `4`)
+- `EVCS_PARALLEL_GRADIENTS` — set to `0`/`false` to force serial gradients

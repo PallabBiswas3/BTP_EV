@@ -7,64 +7,81 @@ export interface LayoutNode {
   layer: number
 }
 
-const LAYER_W = 190
-const ROW_H = 130
+const WIDTH = 920
+const HEIGHT = 680
+const PADDING = 56
 
 /**
- * Auto-layout: shortest-distance BFS layering from configured OD origins.
- * This keeps traffic directed left-to-right and remains finite on cyclic or
- * bidirectional networks. Stations sit between their endpoint road nodes.
+ * Deterministic force-directed layout for cyclic and bidirectional roads.
+ * Links act as undirected springs for positioning only; rendered edges keep
+ * their configured direction and class data.
  */
 export function computeLayout(network: NetworkConfig): Map<string, LayoutNode> {
-  const nodeIds = new Set<string>()
-  const adjacency = new Map<string, string[]>()
+  const ids = [...new Set([
+    ...network.roads.flatMap((road) => [road.u, road.v]),
+    ...network.stations.flatMap((station) => [station.u, station.v]),
+    ...network.ods.flatMap((od) => [od.origin, od.dest]),
+  ])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
 
-  const addEdge = (u: string, v: string) => {
-    nodeIds.add(u); nodeIds.add(v)
-    if (!adjacency.has(u)) adjacency.set(u, [])
-    adjacency.get(u)!.push(v)
+  if (ids.length === 0) return new Map()
+
+  const index = new Map(ids.map((id, i) => [id, i]))
+  const links = new Map<string, [number, number]>()
+  const addLink = (u: string, v: string) => {
+    const a = index.get(u)
+    const b = index.get(v)
+    if (a === undefined || b === undefined || a === b) return
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`
+    links.set(key, [a, b])
   }
+  network.roads.forEach((road) => addLink(road.u, road.v))
+  network.stations.forEach((station) => addLink(station.u, station.v))
 
-  network.roads.forEach((r) => addEdge(r.u, r.v))
-  network.stations.forEach((s) => addEdge(s.u, s.v))
+  const n = ids.length
+  const radius = Math.min(WIDTH, HEIGHT) * 0.36
+  const positions = ids.map((_, i) => {
+    const angle = (2 * Math.PI * i) / n - Math.PI / 2
+    return { x: WIDTH / 2 + radius * Math.cos(angle), y: HEIGHT / 2 + radius * Math.sin(angle) }
+  })
 
-  const layer = new Map<string, number>()
-  const queue: string[] = []
-  const configuredOrigins = [...new Set(network.ods.map((od) => od.origin))]
-    .filter((id) => nodeIds.has(id))
-  const roots = configuredOrigins.length > 0 ? configuredOrigins : [...nodeIds].slice(0, 1)
-  roots.forEach((id) => { layer.set(id, 0); queue.push(id) })
+  const area = (WIDTH - 2 * PADDING) * (HEIGHT - 2 * PADDING)
+  const ideal = Math.sqrt(area / Math.max(n, 1))
+  for (let iteration = 0; iteration < 280; iteration += 1) {
+    const displacement = positions.map(() => ({ x: 0, y: 0 }))
 
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    const d = layer.get(id)!
-    for (const next of adjacency.get(id) ?? []) {
-      if (!layer.has(next)) {
-        layer.set(next, d + 1)
-        queue.push(next)
+    for (let i = 0; i < n; i += 1) {
+      for (let j = i + 1; j < n; j += 1) {
+        let dx = positions[i].x - positions[j].x
+        let dy = positions[i].y - positions[j].y
+        const distance = Math.max(2, Math.hypot(dx, dy))
+        dx /= distance; dy /= distance
+        const force = (ideal * ideal) / distance
+        displacement[i].x += dx * force; displacement[i].y += dy * force
+        displacement[j].x -= dx * force; displacement[j].y -= dy * force
       }
     }
-  }
-  // Anything unreached (disconnected component) gets appended as its own layer.
-  let maxLayer = Math.max(0, ...layer.values())
-  nodeIds.forEach((id) => {
-    if (!layer.has(id)) layer.set(id, ++maxLayer)
-  })
 
-  const byLayer = new Map<number, string[]>()
-  nodeIds.forEach((id) => {
-    const l = layer.get(id)!
-    if (!byLayer.has(l)) byLayer.set(l, [])
-    byLayer.get(l)!.push(id)
-  })
-
-  const result = new Map<string, LayoutNode>()
-  byLayer.forEach((ids, l) => {
-    ids.sort()
-    const totalH = (ids.length - 1) * ROW_H
-    ids.forEach((id, i) => {
-      result.set(id, { id, x: l * LAYER_W, y: i * ROW_H - totalH / 2 + 260, layer: l })
+    links.forEach(([a, b]) => {
+      let dx = positions[a].x - positions[b].x
+      let dy = positions[a].y - positions[b].y
+      const distance = Math.max(2, Math.hypot(dx, dy))
+      dx /= distance; dy /= distance
+      const force = (distance * distance) / ideal
+      displacement[a].x -= dx * force; displacement[a].y -= dy * force
+      displacement[b].x += dx * force; displacement[b].y += dy * force
     })
-  })
-  return result
+
+    const temperature = 52 * (1 - iteration / 280) + 1
+    positions.forEach((position, i) => {
+      displacement[i].x += (WIDTH / 2 - position.x) * 0.025
+      displacement[i].y += (HEIGHT / 2 - position.y) * 0.025
+      const magnitude = Math.max(1, Math.hypot(displacement[i].x, displacement[i].y))
+      position.x += (displacement[i].x / magnitude) * Math.min(magnitude, temperature)
+      position.y += (displacement[i].y / magnitude) * Math.min(magnitude, temperature)
+      position.x = Math.max(PADDING, Math.min(WIDTH - PADDING, position.x))
+      position.y = Math.max(PADDING, Math.min(HEIGHT - PADDING, position.y))
+    })
+  }
+
+  return new Map(ids.map((id, i) => [id, { id, ...positions[i], layer: 0 }]))
 }

@@ -13,12 +13,14 @@ documented at the point of change; summary:
    BDF also reaches the same steady state 2-5x faster than RK45, so
    switching to BDF is both a fidelity fix and a performance win.
 
-2. **Post-hoc convergence check.** Convergence uses the requested global L1
-   residual criterion, ``sum(abs(dstate/dt)) < 1e-9``.  The RHS is checked
-   between integration chunks (and at the final state) instead of through a
-   `solve_ivp` event, avoiding an extra RHS evaluation at every event probe.
+2. **Terminal convergence event.** Convergence uses the requested global L1
+   residual criterion, ``sum(abs(dstate/dt)) < 1e-9``. The integration stops
+   as soon as this criterion is reached, while a final post-hoc check verifies
+   the returned (and route-flow-projected) state.
 
-3. **Path-flow renormalization after every solve** -- the fix for a real
+3. **Chunked integration with path-flow renormalization.** BDF advances in
+   short chunks (50 time units by default), and the route-flow components are
+   projected after every chunk. This is the fix for a real
    numerical failure mode this refactor uncovered. Eq. 22's replicator
    dynamics analytically conserve sum(y_p) = lambda_c for every (OD, class)
    group (d/dt[sum_p y_p] = eta*(avg*sum(y_p) - sum(y_p*cost_p)) = 0 by the
@@ -32,7 +34,7 @@ documented at the point of change; summary:
    source of stiffness in replicator dynamics. This is the "replicator ODE
    overflow at high demand multipliers" failure mode. Renormalizing the
    path-flow components back onto their known constraint manifold after
-   every solve is an exact, cheap correction (projecting onto where the
+   every chunk is an exact, cheap correction (projecting onto where the
    true solution already lives, not a model change) that keeps drift from
    ever accumulating into the runaway regime.
 
@@ -45,10 +47,10 @@ documented at the point of change; summary:
    cheaper to reach -- and, combined with (3), it also means drift never
    gets the chance to accumulate across chained outer-loop steps.
 
-`t_max` defaults to the paper's original 1000-unit horizon for small models.
-This matters because an incompletely settled perturbed solve biases the
-finite-difference demand response and therefore the station price gradient.
-Large models use a separate bounded-horizon policy in `outer_loop()`.
+`t_max` defaults to the paper's original 1000-unit maximum horizon. Every
+network is integrated until either the global L1 convergence criterion is met
+or that horizon is reached. A terminal event can stop inside a chunk; the
+projected state is always checked again before it is accepted as converged.
 Every solve additionally has a defensive fallback so a
 misbehaving network returns a labeled "not fully converged" result instead
 of letting NaN/Inf leak into the JSON response.
@@ -57,6 +59,10 @@ import numpy as np
 from scipy.integrate import solve_ivp
 
 from simulation.pricing import equilibrium_cache
+
+
+_INTEGRATION_CHUNK = 50.0
+_MAX_LOCAL_RESTARTS = 2
 
 
 class EquilibriumResult:
@@ -121,10 +127,21 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
     def rhs(t, state):
         return net.dynamics(t, state, psi_override=psi)
 
+    def _residual(t, state):
+        """Global L1 norm of the complete closed-system derivative."""
+        value = float(np.linalg.norm(rhs(t, state), ord=1))
+        return value if np.isfinite(value) else float("inf")
+
+    def convergence_event(t, state):
+        return _residual(t, state) - tol
+
+    convergence_event.terminal = True
+    convergence_event.direction = -1
+
     cached = equilibrium_cache.load_exact(net, psi, tol)
     if cached is not None:
         cached_state, _stored_residual, _stored_conservation, cached_elapsed = cached
-        residual = np.linalg.norm(rhs(0.0, cached_state), ord=1)
+        residual = _residual(0.0, cached_state)
         conservation = _conservation_error(net, cached_state)
         if residual < tol and conservation <= 1e-8:
             return EquilibriumResult(
@@ -134,6 +151,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
             )
 
     cache_warm_start = False
+    started_cold = False
     if y0 is None:
         nearest = equilibrium_cache.load_nearest(net, psi)
         if nearest is not None:
@@ -141,50 +159,104 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
             cache_warm_start = True
         else:
             y0 = net.initial_state()
+            started_cold = True
+
+    jac_sparsity = net.jacobian_sparsity()
 
     def _solve(y_start):
-        if net.N_STATES <= 200:
-            sol = solve_ivp(
-                rhs, (0.0, t_max), y_start, method="BDF",
-                rtol=1e-7, atol=1e-9, max_step=15.0,
-                jac_sparsity=net.jacobian_sparsity(),
-            )
-            if not sol.success or not sol.y.size or not np.all(np.isfinite(sol.y[:, -1])):
-                state = sol.y[:, -1] if sol.y.size else y_start
-                elapsed = float(sol.t[-1]) if sol.t.size else 0.0
-                return state, False, sol.message, elapsed
-            return _renormalize_path_flows(net, sol.y[:, -1]), True, "", t_max
+        """Advance BDF in bounded chunks and restore route-flow invariants.
 
-        # Project periodically instead of only at t_max. Replicator dynamics
-        # conserve each OD/class simplex analytically, but a long stiff solve
-        # can drift far enough from it that BDF's step size collapses.
-        state = _renormalize_path_flows(net, y_start)
+        The terminal event is retained so a solve can stop between chunk
+        boundaries. Because projecting route flows can slightly change the
+        derivative, convergence is only accepted after projection and a fresh
+        global L1 residual evaluation.
+        """
+        state = np.asarray(y_start, dtype=float).copy()
+        if state.shape != (net.N_STATES,) or not np.all(np.isfinite(state)):
+            return state, False, "Initial state contains invalid values.", 0.0
+
+        state = _renormalize_path_flows(net, state)
         elapsed = 0.0
-        chunk_horizon = 50.0
-        while elapsed < t_max - 1e-12:
-            end = min(t_max, elapsed + chunk_horizon)
-            sol = solve_ivp(
-                rhs, (elapsed, end), state, method="BDF",
-                rtol=1e-7, atol=1e-9, max_step=15.0,
-                jac_sparsity=net.jacobian_sparsity(),
-            )
-            if not sol.success or not sol.y.size or not np.all(np.isfinite(sol.y[:, -1])):
-                return state, False, sol.message, elapsed
-            state = _renormalize_path_flows(net, sol.y[:, -1])
-            elapsed = end
-            residual_l1 = np.linalg.norm(rhs(elapsed, state), ord=1)
-            if residual_l1 < tol:
-                break
-        return state, True, "", elapsed
+        residual = _residual(elapsed, state)
+        if residual < tol:
+            return state, True, "", elapsed
 
-    def _finalize(state, elapsed):
-        residual = np.linalg.norm(rhs(elapsed, state), ord=1)
+        local_restarts = 0
+        last_message = ""
+        horizon = max(0.0, float(t_max))
+
+        while elapsed < horizon:
+            chunk_end = min(elapsed + _INTEGRATION_CHUNK, horizon)
+            try:
+                sol = solve_ivp(
+                    rhs, (elapsed, chunk_end), state, method="BDF",
+                    rtol=1e-7, atol=1e-9, max_step=15.0,
+                    jac_sparsity=jac_sparsity,
+                    events=convergence_event,
+                )
+            except Exception as exc:  # noqa: BLE001 - handled by fallback
+                return state, False, f"BDF raised {exc}", elapsed
+
+            if not sol.y.size or not sol.t.size:
+                return state, False, sol.message or "BDF returned no state.", elapsed
+
+            candidate = sol.y[:, -1]
+            candidate_elapsed = float(sol.t[-1])
+            if not np.all(np.isfinite(candidate)):
+                return state, False, sol.message or "BDF returned a non-finite state.", elapsed
+
+            # Projection is performed even when BDF stopped on the event or
+            # reported failure, so a numerically drifted but finite endpoint
+            # can be safely checked or locally restarted.
+            state = _renormalize_path_flows(net, candidate)
+            progress = candidate_elapsed - elapsed
+            elapsed = candidate_elapsed
+            residual = _residual(elapsed, state)
+            if residual < tol:
+                return state, True, "", elapsed
+
+            if not sol.success:
+                last_message = sol.message
+                # A projection often removes the simplex-boundary stiffness
+                # that caused the failed step. Retry locally rather than
+                # throwing away all completed chunks and starting cold.
+                minimum_progress = max(1e-10, 1e-10 * max(1.0, abs(elapsed)))
+                if progress <= minimum_progress or local_restarts >= _MAX_LOCAL_RESTARTS:
+                    return state, False, last_message, elapsed
+                local_restarts += 1
+                continue
+
+            local_restarts = 0
+
+            # An event can fire on the unprojected trajectory. If projection
+            # moved the endpoint back above tolerance, resume from that exact
+            # manifold point. Guard against an event repeatedly stopping at
+            # the same floating-point time.
+            if progress <= max(1e-12, 1e-12 * max(1.0, abs(elapsed))):
+                return state, False, (
+                    "Convergence event stalled before the projected state "
+                    "met the residual tolerance."
+                ), elapsed
+
+        return state, True, last_message, elapsed
+
+    def _finalize(state, elapsed, solver_message=""):
+        residual = _residual(elapsed, state)
         converged = bool(residual < tol)
-        msg = "" if converged else (
-            f"Residual ||dx/dt||_1={residual:.2e} did not meet "
-            f"the strict tolerance < {tol:.1e} after t={elapsed:g} "
-            f"(t_max={t_max})."
-        )
+        if converged:
+            msg = ""
+        elif solver_message:
+            msg = (
+                f"Inner BDF solve stopped at t={elapsed:g}: {solver_message} "
+                f"Residual ||dx/dt||_1={residual:.2e} did not meet "
+                f"the strict tolerance < {tol:.1e}."
+            )
+        else:
+            msg = (
+                f"Residual ||dx/dt||_1={residual:.2e} did not meet "
+                f"the strict tolerance < {tol:.1e} after t={elapsed:g} "
+                f"(t_max={t_max})."
+            )
         result = EquilibriumResult(
             state, converged=converged, message=msg, residual=residual,
             conservation_error=_conservation_error(net, state), elapsed=elapsed,
@@ -197,27 +269,70 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
             )
         return result
 
+    def _defensive_result(state, elapsed, message):
+        """Build a finite failure result even for a malformed network/state."""
+        try:
+            safe_state = np.asarray(state, dtype=float)
+            if safe_state.shape != (net.N_STATES,):
+                safe_state = np.asarray(net.initial_state(), dtype=float)
+            safe_state = np.nan_to_num(
+                safe_state, nan=0.0, posinf=1e6, neginf=0.0,
+            )
+        except Exception:  # noqa: BLE001 - last-resort API safety
+            safe_state = np.zeros(net.N_STATES, dtype=float)
+
+        try:
+            residual = _residual(elapsed, safe_state)
+        except Exception:  # noqa: BLE001
+            residual = float("inf")
+        try:
+            conservation = _conservation_error(net, safe_state)
+        except Exception:  # noqa: BLE001
+            conservation = float("inf")
+        return EquilibriumResult(
+            safe_state, converged=False, message=message, residual=residual,
+            conservation_error=conservation, elapsed=elapsed,
+            cache_warm_start=cache_warm_start,
+        )
+
+    state = net.initial_state()
+    success = False
+    solver_message = "Inner solve failed before integration started."
+    elapsed = 0.0
     try:
-        state, success, _message, elapsed = _solve(y0)
+        state, success, solver_message, elapsed = _solve(y0)
         if success:
             return _finalize(state, elapsed)
-    except Exception:  # noqa: BLE001 - defensive: never let a bad network
-        pass  # config crash the request; fall through to cold retry.
+    except Exception as exc:  # noqa: BLE001 - defensive for bad configs
+        solver_message = f"Inner solve raised {exc}"
 
-    # Cold retry from the canonical initial state, in case the warm start
-    # itself was an already-diverged state.
+    # Cold retry only when a warm start failed before making meaningful
+    # progress. A late failure already has a finite, projected state; redoing
+    # the entire horizon cold is expensive and normally less accurate than
+    # returning that best endpoint with a clear warning.
+    meaningful_progress = 0.5 * min(
+        _INTEGRATION_CHUNK, max(0.0, float(t_max)),
+    )
+    if elapsed >= meaningful_progress or started_cold:
+        try:
+            return _finalize(state, elapsed, solver_message)
+        except Exception as exc:  # noqa: BLE001
+            return _defensive_result(
+                state, elapsed, f"Inner solve failed while finalizing: {exc}",
+            )
+
+    # The warm start itself may have been invalid or already divergent.
+    # Preserve the defensive cold fallback for that case.
     try:
         state, success, solver_message, elapsed = _solve(net.initial_state())
         if success:
             return _finalize(state, elapsed)
-        return EquilibriumResult(
+        return _finalize(
             np.nan_to_num(state, nan=0.0, posinf=1e6, neginf=0.0),
-            converged=False,
-            message=f"Inner system did not settle within t_max={t_max} "
-                    f"(solver: {solver_message}). Treat results as unreliable.",
+            elapsed,
+            f"{solver_message} Cold fallback also failed; treat results as unreliable.",
         )
     except Exception as exc:  # noqa: BLE001
-        return EquilibriumResult(
-            net.initial_state(), converged=False,
-            message=f"Inner solve failed: {exc}",
+        return _defensive_result(
+            state, elapsed, f"Inner solve failed: {exc}",
         )

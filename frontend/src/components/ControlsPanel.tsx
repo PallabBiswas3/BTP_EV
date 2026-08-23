@@ -165,20 +165,14 @@ export default function ControlsPanel({
               </select>
             </label>
             <p className="muted" style={{ marginTop: 6, marginBottom: 12 }}>
-              Research uses more candidate routes, exact station-by-station gradients, and longer inner solves.
+              Profiles control candidate-route limits. All profiles use the same L1 stopping criterion and station-by-station gradients.
             </p>
             <div className="two-col-form">
-            <label>Minimum pricing steps
+            <label>Pricing steps
               <input type="number" min={1} max={200} value={options.n_steps} onChange={(e) => setOption('n_steps', Number(e.target.value))} />
-            </label>
-            <label>Maximum pricing steps
-              <input type="number" min={1} max={500} value={options.max_outer_steps} onChange={(e) => setOption('max_outer_steps', Number(e.target.value))} />
             </label>
             <label>Price-change tolerance
               <input type="number" min={0.000001} max={0.1} step={0.0001} value={options.outer_tolerance} onChange={(e) => setOption('outer_tolerance', Number(e.target.value))} />
-            </label>
-            <label>Stable iterations
-              <input type="number" min={1} max={20} value={options.stable_outer_steps} onChange={(e) => setOption('stable_outer_steps', Number(e.target.value))} />
             </label>
             <label>Sim. time t_end
               <input type="number" min={1} value={options.t_end} onChange={(e) => setOption('t_end', Number(e.target.value))} />
