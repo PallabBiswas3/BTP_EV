@@ -21,7 +21,6 @@ from app.schemas.network import (
 )
 from app.services import jobs
 from app.services import simulation_service as svc
-from simulation.scenarios.loader import build_network_from_data
 
 router = APIRouter(tags=["simulation"])
 
@@ -30,12 +29,15 @@ def _network_dict(network) -> dict:
     return network.model_dump(exclude_none=True)
 
 
-def _check_buildable(network: dict):
+def _check_buildable(network: dict, accuracy_mode: str):
     """Fail fast with a 422 (not a 500 from inside a background thread) if
     the network can't even be built -- e.g. an OD pair with no feasible
     path for its class."""
     try:
-        build_network_from_data(network)
+        # Use the same cached builder and route profile as the background job.
+        # Besides keeping validation consistent, the job receives an immediate
+        # cache hit instead of constructing a large route set twice.
+        svc.build_network(network, accuracy_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -43,7 +45,7 @@ def _check_buildable(network: dict):
 @router.post("/simulate")
 def simulate(req: SimulateRequest):
     network = _network_dict(req.network)
-    _check_buildable(network)
+    _check_buildable(network, req.simulation_options.accuracy_mode)
     options = req.simulation_options
 
     def work(report_progress):
@@ -56,7 +58,7 @@ def simulate(req: SimulateRequest):
 @router.post("/equilibrium")
 def equilibrium(req: EquilibriumRequest):
     network = _network_dict(req.network)
-    _check_buildable(network)
+    _check_buildable(network, req.simulation_options.accuracy_mode)
     options = req.simulation_options
 
     def work(report_progress):
@@ -69,7 +71,7 @@ def equilibrium(req: EquilibriumRequest):
 @router.post("/beta-sweep")
 def beta_sweep(req: BetaSweepRequest):
     network = _network_dict(req.network)
-    _check_buildable(network)
+    _check_buildable(network, req.simulation_options.accuracy_mode)
     options = req.simulation_options
 
     def work(report_progress):
@@ -84,7 +86,7 @@ def beta_sweep(req: BetaSweepRequest):
 @router.post("/compare-pricing")
 def compare_pricing(req: ComparePricingRequest):
     network = _network_dict(req.network)
-    _check_buildable(network)
+    _check_buildable(network, req.simulation_options.accuracy_mode)
     options = req.simulation_options
 
     def work(report_progress):

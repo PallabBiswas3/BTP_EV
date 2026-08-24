@@ -1,0 +1,551 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\proj}{\operatorname{Proj}}
+
+\title{Dynamic EV Charging-Station Pricing:\\Problem Statement, Mathematical Model, and Numerical Solution}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Problem statement}
+
+We consider a directed transportation network containing ordinary road links
+and charging-station links. Travellers belong to classes such as electric
+vehicles (EVs) and non-electric vehicles (NEVs). For every origin--destination
+(OD) pair, travellers choose among a bounded set of feasible routes. EV routes
+contain one reachable charging station, whereas NEV routes contain only road
+links.
+
+The problem contains two coupled decision levels:
+
+\begin{enumerate}
+    \item \textbf{Inner traffic and route-choice equilibrium.} For fixed
+    charging prices, road occupancies, station occupancies, and route flows
+    evolve according to a system of ordinary differential equations (ODEs).
+    Travellers gradually move flow toward routes with lower perceived cost.
+    The inner problem is solved until the complete ODE is close to a fixed
+    point.
+
+    \item \textbf{Outer strategic pricing problem.} Every station changes its
+    price to increase its own equilibrium profit. Changing one price changes
+    travellers' route choices, congestion, station occupancy, and throughput;
+    therefore profit must be evaluated after solving the inner equilibrium
+    again.
+\end{enumerate}
+
+For a price vector $\boldsymbol{\psi}$, let
+$\mathbf{z}^{\star}(\boldsymbol{\psi})$ denote the resulting inner
+equilibrium. Station $s$ seeks to increase
+\begin{equation}
+    \Pi_s\!\left(\boldsymbol{\psi},
+    \mathbf{z}^{\star}(\boldsymbol{\psi})\right).
+\end{equation}
+Thus the overall problem is a nested equilibrium problem rather than a single
+static shortest-path calculation.
+
+\section{Notation}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.19\textwidth}
+                  >{\raggedright\arraybackslash}p{0.73\textwidth}}
+\toprule
+Symbol & Meaning \\
+\midrule
+\endfirsthead
+\toprule
+Symbol & Meaning \\
+\midrule
+\endhead
+$G=(V,E)$ & Directed transportation graph, with node set $V$ and link set $E$. \\
+$E_r$ & Set of ordinary road links. \\
+$E_s$ & Set of charging-station links. \\
+$\mathcal{C}$ & Set of vehicle classes, for example $\{\mathrm{EV},\mathrm{NEV}\}$. \\
+$\mathcal{W}$ & Set of OD pairs. \\
+$w=(o_w,d_w)$ & OD pair with origin $o_w$ and destination $d_w$. \\
+$\lambda_w(t)$ & Total exogenous demand rate for OD pair $w$ at time $t$. \\
+$\theta_{wc}$ & Share of OD demand belonging to class $c$, with $\sum_c\theta_{wc}=1$. \\
+$\lambda_{wc}(t)$ & Class-specific demand, $\lambda_{wc}(t)=\theta_{wc}\lambda_w(t)$. \\
+$\mathcal{P}_{wc}$ & Bounded set of feasible paths for OD/class group $(w,c)$. \\
+$p$ & A path in $\mathcal{P}_{wc}$. \\
+$\delta_{ep}$ & Link--path incidence: $1$ if link $e$ belongs to path $p$, otherwise $0$. \\
+$x_{ec}(t)$ & Occupancy/state of road link $e\in E_r$ for class $c$. \\
+$x_s(t)$ & Occupancy/state of charging station $s\in E_s$. \\
+$y_p(t)$ & Replicator route-flow state associated with path $p$. \\
+$S_{wc}(t)$ & Current route-flow total, $S_{wc}(t)=\sum_{p\in\mathcal{P}_{wc}}y_p(t)$. \\
+$q_p(t)$ & Physical demand assigned to path $p$. \\
+$u_{ec}(t)$ & Arrival rate to road link $e$ for class $c$. \\
+$u_s(t)$ & Arrival rate to charging station $s$. \\
+$f_{ec}(t)$ & Road outflow rate from link $e$ for class $c$. \\
+$\rho_s(t)$ & Charging-station throughput. \\
+$a_e$ & Linear road discharge coefficient. \\
+$L_e$ & Road flow/capacity scale used by the latency function. \\
+$\ell_e^0$ & Road latency coefficient. \\
+$a_s$ & Unsaturated station discharge coefficient. \\
+$\mu_s$ & Maximum station service rate. \\
+$K_s$ & Station saturation occupancy, $K_s=\mu_s/a_s$. \\
+$W_s(x_s)$ & Station waiting-time function. \\
+$\phi_s^0$ & Fixed non-price component of station cost. \\
+$\alpha$ & Weight assigned to station waiting time. \\
+$\gamma$ & Weight converting monetary price into perceived generalized cost. \\
+$\psi_s$ & Price charged by station $s$. \\
+$c_s$ & Per-vehicle operating cost of station $s$. \\
+$C_e$ & Generalized cost of link $e$. \\
+$C_p$ & Generalized cost of path $p$. \\
+$\overline C_{wc}$ & Current flow-weighted average path cost for group $(w,c)$. \\
+$\eta$ & Route-choice/replicator adaptation rate. \\
+$\mathbf{x}$ & Vector containing every road and station state. \\
+$\mathbf{y}$ & Vector containing every multi-route replicator state. \\
+$\mathbf{z}$ & Complete inner state, $\mathbf{z}=[\mathbf{x}^{\mathsf T},\mathbf{y}^{\mathsf T}]^{\mathsf T}$. \\
+$F$ & Complete ODE right-hand side, $\dot{\mathbf z}=F(\mathbf z;\boldsymbol\psi)$. \\
+$R$ & Inner equilibrium residual, $R=\|\dot{\mathbf{x}}\|_2+\|\dot{\mathbf{y}}\|_2$. \\
+$\varepsilon$ & Inner stopping tolerance; the implementation uses $10^{-6}$. \\
+$T_{\max}$ & Maximum inner integration horizon; the default is $1000$. \\
+$\Pi_s$ & Profit rate of station $s$. \\
+$\Delta$ & Finite-difference price perturbation; the default is $0.02$. \\
+$g_s$ & Estimated derivative of station $s$'s profit with respect to its price. \\
+$g_{\max}$ & Gradient clipping bound; the default is $5$. \\
+$\kappa$ & Outer price adaptation gain; the default is $0.1$. \\
+$\Delta\tau$ & Outer-loop step duration; the default is $1$. \\
+$\psi_{\max}$ & Maximum permitted station price; the default is $3$. \\
+$k$ & Outer pricing-iteration index. \\
+\bottomrule
+\end{longtable}
+
+\section{Step 1: feasible-route construction}
+
+For each group $(w,c)$, the implementation first removes links that cannot be
+used by class $c$. It then constructs a bounded set $\mathcal{P}_{wc}$ of
+short, simple, feasible alternatives. NEV paths contain no station link. EV
+paths contain exactly one station link and are formed from a road path from the
+origin to a station, the station link itself, and a road path from the station
+to the destination.
+
+Bounding $|\mathcal{P}_{wc}|$ is essential because enumerating every simple
+path can grow exponentially with network size. In preview mode, one best road
+prefix and suffix is retained per reachable station, followed by a limit of
+eight paths per OD/class group. Class-filtered road graphs and repeated path
+segments are cached during construction. The route set is part of the model:
+changing it can change the computed equilibrium.
+
+\section{Step 2: class-specific demand and route flow}
+
+The demand of class $c$ for OD pair $w$ is
+\begin{equation}
+    \lambda_{wc}(t)=\theta_{wc}\lambda_w(t).
+\end{equation}
+For a group with multiple paths, the physical flow assigned to path $p$ is
+\begin{equation}
+    q_p(t)=\lambda_{wc}(t)\frac{y_p(t)}{S_{wc}(t)},
+    \qquad
+    S_{wc}(t)=\sum_{r\in\mathcal{P}_{wc}}y_r(t).
+    \label{eq:path-flow}
+\end{equation}
+If there is only one feasible path, all class demand is assigned to it. If
+$S_{wc}$ is numerically zero, equal route fractions are used defensively.
+Because the solver projects route flows onto
+\begin{equation}
+    \mathcal{Y}_{wc}=
+    \left\{\mathbf y_{wc}\geq 0:
+    \sum_{p\in\mathcal{P}_{wc}}y_p=\lambda_{wc}\right\},
+\end{equation}
+normally $S_{wc}=\lambda_{wc}$ and hence $q_p=y_p$.
+
+\section{Step 3: road and station dynamics}
+
+For road link $e$ and class $c$, the outflow is
+\begin{equation}
+    f_{ec}(t)=a_e x_{ec}(t).
+\end{equation}
+The road conservation equation is
+\begin{equation}
+    \dot{x}_{ec}(t)=u_{ec}(t)-f_{ec}(t).
+    \label{eq:road-dynamics}
+\end{equation}
+
+For charging station $s$, throughput is saturated:
+\begin{equation}
+    \rho_s(x_s)=\min\{a_sx_s,\mu_s\},
+    \label{eq:throughput}
+\end{equation}
+and station occupancy follows
+\begin{equation}
+    \dot{x}_s(t)=u_s(t)-\rho_s(x_s(t)).
+    \label{eq:station-dynamics}
+\end{equation}
+
+At an origin, the incoming flow to the first link of every route is $q_p$.
+At an internal link, the outgoing flow is divided among successor links using
+the route-flow proportions. If $e$ is followed by $j$ for some class-$c$
+paths, the implemented turning fraction can be written as
+\begin{equation}
+    \tau_{e\rightarrow j,c}
+    =\frac{\sum_{p:\,(e,j)\in p,\,p\in\mathcal{P}_{wc}}q_p}
+    {\sum_{p:\,e\in p,\,p\in\mathcal{P}_{wc}}q_p}.
+\end{equation}
+Consequently, $f_{ec}\tau_{e\rightarrow j,c}$ contributes to the arrival
+rate of successor $j$. This construction conserves flow through the network.
+
+\section{Step 4: generalized link and path costs}
+
+Let total occupancy on road $e$ be
+\begin{equation}
+    x_e^{\mathrm{tot}}=\sum_{c\in\mathcal C}x_{ec},
+\end{equation}
+and let total road outflow be $f_e=a_ex_e^{\mathrm{tot}}$. The implemented
+road cost is
+\begin{equation}
+    C_e^{r}(x_e^{\mathrm{tot}})
+    =\ell_e^0
+    \frac{f_e/L_e}{1-f_e/L_e},
+    \qquad 0\leq \frac{f_e}{L_e}<1.
+    \label{eq:road-cost}
+\end{equation}
+Numerically, $f_e/L_e$ is clipped below $1$ to avoid division by zero.
+
+The saturation occupancy and waiting time at station $s$ are
+\begin{align}
+    K_s &= \frac{\mu_s}{a_s},\\
+    W_s(x_s)&=\frac{\max\{x_s-K_s,0\}}{\mu_s}.
+\end{align}
+The station's generalized user cost is
+\begin{equation}
+    C_s^{\mathrm{ch}}(x_s,\psi_s)
+    =\phi_s^0+\alpha W_s(x_s)+\gamma\psi_s.
+    \label{eq:station-cost}
+\end{equation}
+The total cost of path $p$ is additive:
+\begin{equation}
+    C_p(\mathbf x,\boldsymbol\psi)
+    =\sum_{e\in p\cap E_r}C_e^r
+    +\sum_{s\in p\cap E_s}C_s^{\mathrm{ch}}.
+    \label{eq:path-cost}
+\end{equation}
+
+\section{Step 5: route-choice dynamics}
+
+For each multi-route group $(w,c)$, define its current flow-weighted average
+cost as
+\begin{equation}
+    \overline C_{wc}
+    =\frac{\sum_{p\in\mathcal P_{wc}}y_pC_p}
+    {S_{wc}},
+    \qquad S_{wc}=\sum_{p\in\mathcal P_{wc}}y_p.
+    \label{eq:average-cost}
+\end{equation}
+The route-flow state evolves according to replicator dynamics:
+\begin{equation}
+    \dot y_p
+    =\eta y_p\left(\overline C_{wc}-C_p\right),
+    \qquad p\in\mathcal P_{wc}.
+    \label{eq:replicator}
+\end{equation}
+If $C_p<\overline C_{wc}$, then $\dot y_p>0$ and flow moves toward path $p$.
+If $C_p>\overline C_{wc}$, then $\dot y_p<0$.
+
+The current-total denominator in Equation~\eqref{eq:average-cost} preserves
+the group total:
+\begin{align}
+    \frac{\dd S_{wc}}{\dd t}
+    &=\sum_p\dot y_p\\
+    &=\eta\left(
+       \overline C_{wc}\sum_p y_p-\sum_p y_pC_p
+      \right)\\
+    &=\eta\left(
+       \frac{\sum_p y_pC_p}{S_{wc}}S_{wc}-\sum_p y_pC_p
+      \right)=0.
+\end{align}
+This identity is the reason for normalizing by the current sum $S_{wc}$ rather
+than by the target demand. It prevents a small numerical deviation in the
+route-flow total from being amplified by the vector field.
+
+At a route-choice equilibrium, every used path has the same minimum cost:
+\begin{equation}
+    y_p^{\star}>0
+    \quad\Longrightarrow\quad
+    C_p(\mathbf x^{\star},\boldsymbol\psi)
+    =\overline C_{wc}^{\star}.
+    \label{eq:wardrop}
+\end{equation}
+This is the Wardrop-type user-equilibrium interpretation of the replicator
+fixed point.
+
+\section{Step 6: inner equilibrium computation}
+
+Collect all states into
+\begin{equation}
+    \mathbf z=
+    \begin{bmatrix}\mathbf x\\\mathbf y\end{bmatrix},
+    \qquad
+    \dot{\mathbf z}=F(\mathbf z;\boldsymbol\psi).
+\end{equation}
+For fixed prices, an exact equilibrium satisfies
+\begin{equation}
+    F(\mathbf z^{\star};\boldsymbol\psi)=\mathbf 0.
+\end{equation}
+The implementation accepts a numerical equilibrium when
+\begin{equation}
+    R(\mathbf z;\boldsymbol\psi)
+    =\left\|\dot{\mathbf x}\right\|_2
+     +\left\|\dot{\mathbf y}\right\|_2
+    \leq\varepsilon,
+    \qquad \varepsilon=10^{-6}.
+    \label{eq:residual}
+\end{equation}
+
+The ODE is integrated with SciPy's implicit BDF method because the coupled
+traffic and replicator dynamics can be stiff. The default numerical settings
+are relative tolerance $10^{-7}$, absolute tolerance $10^{-9}$, maximum BDF
+step $15$, chunk length $50$, and maximum horizon $T_{\max}=1000$.
+
+For equilibrium integration only, the route-choice derivative is multiplied
+by a positive time-scale factor $20$. This accelerates slow adaptation caused
+by the small price perturbations used for finite differences. Because
+$20\dot{\mathbf y}=\mathbf 0$ if and only if
+$\dot{\mathbf y}=\mathbf 0$, the equilibrium points are unchanged. The
+stopping residual in Equation~\eqref{eq:residual} is evaluated using the
+original unscaled dynamics. Ordinary time-trajectory simulation also retains
+the original configured value of $\eta$.
+
+After each chunk, route flows are projected back onto their simplex. Define
+$\widetilde y_p=\max\{y_p,0\}$. If
+$\sum_r\widetilde y_r>0$, the projection is
+\begin{equation}
+    y_p\leftarrow
+    \lambda_{wc}\frac{\widetilde y_p}
+    {\sum_{r\in\mathcal P_{wc}}\widetilde y_r}.
+    \label{eq:projection}
+\end{equation}
+If every clipped value is zero, demand is distributed equally. The residual
+in Equation~\eqref{eq:residual} is recomputed after projection; therefore an
+event detected on an unprojected trajectory is not accepted blindly.
+
+The solver also uses a sparse Jacobian pattern, warm-starts nearby price
+profiles from their previous equilibrium, caches verified equilibria, and
+returns a non-convergence warning rather than representing a finite endpoint
+as an exact fixed point.
+
+\section{Step 7: station profit and strategic price update}
+
+At inner equilibrium, station $s$ earns
+\begin{equation}
+    \Pi_s(\boldsymbol\psi)
+    =(\psi_s-c_s)\rho_s
+    \left(x_s^{\star}(\boldsymbol\psi)\right).
+    \label{eq:profit}
+\end{equation}
+The dependence of equilibrium throughput on every station price makes an
+analytic derivative inconvenient. The implementation uses a coordinate-wise
+central finite difference. For station $s$ at iteration $k$, define
+\begin{align}
+    \psi_{s,k}^{+}&=\min\{\psi_{s,k}+\Delta,\psi_{\max}\},\\
+    \psi_{s,k}^{-}&=\max\{\psi_{s,k}-\Delta,0\}.
+\end{align}
+All other station prices remain fixed. After separately solving the inner
+equilibrium at the two perturbed price vectors,
+\begin{equation}
+    g_{s,k}
+    \approx
+    \frac{\Pi_s(\boldsymbol\psi_k^{+})
+          -\Pi_s(\boldsymbol\psi_k^{-})}
+         {\psi_{s,k}^{+}-\psi_{s,k}^{-}}.
+    \label{eq:finite-difference}
+\end{equation}
+The estimate is clipped to $[-g_{\max},g_{\max}]$, and projected gradient
+ascent gives
+\begin{equation}
+    \psi_{s,k+1}
+    =\proj_{[0,\psi_{\max}]}
+      \left(\psi_{s,k}+\Delta\tau\,\kappa\,
+      \clip(g_{s,k},-g_{\max},g_{\max})\right).
+    \label{eq:price-update}
+\end{equation}
+The implementation allows at most $N=30$ outer iterations by default and can
+stop earlier after the requested number of consecutive stable, fully
+converged iterations. With $m$ stations, the upper bound on inner solves is
+\begin{equation}
+    N(1+2m)+1
+\end{equation}
+inner solves: one nominal and $2m$ perturbed solves per iteration, followed by
+one final solve. Independent perturbation solves are evaluated in parallel
+when worker processes are available.
+
+\section{Worked numerical example}
+
+Consider one EV OD pair with constant demand $\lambda=1$ vehicle/time and two
+paths, $p_1$ through station $s_1$ and $p_2$ through station $s_2$. Assume
+\begin{equation}
+    y_1=0.6,\qquad y_2=0.4,\qquad S=y_1+y_2=1.
+\end{equation}
+From Equation~\eqref{eq:path-flow},
+\begin{equation}
+    q_1=1\frac{0.6}{1}=0.6,
+    \qquad
+    q_2=1\frac{0.4}{1}=0.4.
+\end{equation}
+
+\subsection*{Road costs}
+
+Let both roads have $\ell^0=0.2$, $L=4$, and $a=1$. Let their occupancies be
+$x_1=1$ and $x_2=0.5$. For road 1,
+\begin{align}
+    f_1&=a x_1=1,\\
+    C_1^r&=0.2\frac{1/4}{1-1/4}
+          =0.066667.
+\end{align}
+For road 2,
+\begin{align}
+    f_2&=a x_2=0.5,\\
+    C_2^r&=0.2\frac{0.5/4}{1-0.5/4}
+          =0.028571.
+\end{align}
+
+\subsection*{Station throughput, waiting time, and cost}
+
+Let both stations have $a_s=0.5$, $\mu_s=2$, $\phi_s^0=0.1$,
+$\alpha=0.3$, and $\gamma=1$. Thus
+\begin{equation}
+    K_s=\frac{2}{0.5}=4.
+\end{equation}
+Suppose $x_{s_1}=5$, $\psi_{s_1}=0.5$, $x_{s_2}=2$, and
+$\psi_{s_2}=0.7$. Then
+\begin{align}
+    \rho_{s_1}&=\min\{0.5(5),2\}=2,\\
+    W_{s_1}&=\frac{\max\{5-4,0\}}{2}=0.5,\\
+    C_{s_1}^{\mathrm{ch}}&=0.1+0.3(0.5)+1(0.5)=0.75,
+\end{align}
+whereas
+\begin{align}
+    \rho_{s_2}&=\min\{0.5(2),2\}=1,\\
+    W_{s_2}&=0,\\
+    C_{s_2}^{\mathrm{ch}}&=0.1+0+1(0.7)=0.8.
+\end{align}
+
+\subsection*{Path costs and route adaptation}
+
+Each path contains its corresponding road and station, so
+\begin{align}
+    C_{p_1}&=0.066667+0.75=0.816667,\\
+    C_{p_2}&=0.028571+0.8=0.828571.
+\end{align}
+The current average cost is
+\begin{align}
+    \overline C
+    &=0.6(0.816667)+0.4(0.828571)\\
+    &=0.821429.
+\end{align}
+With $\eta=0.05$, Equation~\eqref{eq:replicator} gives
+\begin{align}
+    \dot y_1
+    &=0.05(0.6)(0.821429-0.816667)
+      =1.4286\times10^{-4},\\
+    \dot y_2
+    &=0.05(0.4)(0.821429-0.828571)
+      =-1.4284\times10^{-4}.
+\end{align}
+The cheaper path gains flow and the more expensive path loses flow. Apart from
+rounding,
+\begin{equation}
+    \dot y_1+\dot y_2=0,
+\end{equation}
+so total OD/class demand is preserved.
+
+\subsection*{Physical-state derivative and equilibrium residual}
+
+Assume each path has a unique road followed by its station. Road arrivals are
+$0.6$ and $0.4$, while road outflows are $1$ and $0.5$. Therefore
+\begin{align}
+    \dot x_1&=0.6-1=-0.4,\\
+    \dot x_2&=0.4-0.5=-0.1.
+\end{align}
+The road outflows become station arrivals, so
+\begin{align}
+    \dot x_{s_1}&=1-2=-1,\\
+    \dot x_{s_2}&=0.5-1=-0.5.
+\end{align}
+Thus
+\begin{align}
+    \|\dot{\mathbf x}\|_2
+    &=\sqrt{(-0.4)^2+(-0.1)^2+(-1)^2+(-0.5)^2}\\
+    &=\sqrt{1.42}=1.19164,\\
+    \|\dot{\mathbf y}\|_2
+    &\approx\sqrt{(1.4286\times10^{-4})^2
+                   +(-1.4284\times10^{-4})^2}\\
+    &\approx2.020\times10^{-4},\\
+    R&\approx1.19184.
+\end{align}
+Since $R\gg10^{-6}$, this state is not an equilibrium and BDF continues
+integrating. At the accepted equilibrium, road and station inflows balance
+their outflows and used path costs are equal, making both derivative norms
+smaller than the required combined tolerance.
+
+\subsection*{Profit and one price update}
+
+Let operating cost be $c_{s_1}=0.2$. At the displayed state,
+\begin{equation}
+    \Pi_{s_1}=(0.5-0.2)(2)=0.6.
+\end{equation}
+For the actual gradient, the inner equilibrium must be solved again at both
+perturbed prices. As an illustrative finite-difference step, let $\Delta=0.02$
+and suppose those two equilibrium solves produce
+\begin{align}
+    \rho_{s_1}^{+}&=1.9 &&\text{at }\psi_{s_1}^{+}=0.52,\\
+    \rho_{s_1}^{-}&=2.1 &&\text{at }\psi_{s_1}^{-}=0.48.
+\end{align}
+Then
+\begin{align}
+    \Pi_{s_1}^{+}&=(0.52-0.2)(1.9)=0.608,\\
+    \Pi_{s_1}^{-}&=(0.48-0.2)(2.1)=0.588,\\
+    g_{s_1}&\approx\frac{0.608-0.588}{0.52-0.48}=0.5.
+\end{align}
+Using $\kappa=0.1$ and $\Delta\tau=1$,
+\begin{equation}
+    \psi_{s_1,\mathrm{new}}
+    =\proj_{[0,3]}\bigl(0.5+1(0.1)(0.5)\bigr)
+    =0.55.
+\end{equation}
+Thus the station raises its price because its estimated equilibrium-profit
+gradient is positive.
+
+\section{Algorithm summary}
+
+\begin{enumerate}
+    \item Read the directed roads, stations, OD demands, vehicle classes, and
+    model parameters.
+    \item Generate a bounded feasible-route set for every OD/class group.
+    \item Initialize road and station states to zero and distribute each
+    multi-route demand equally across its paths.
+    \item Fix the current station-price vector $\boldsymbol\psi$.
+    \item Integrate the coupled traffic, station, and replicator ODE with BDF.
+    After every chunk, project route flows onto their demand simplex.
+    \item Stop when
+    $\|\dot{\mathbf x}\|_2+\|\dot{\mathbf y}\|_2\leq10^{-6}$ or report that
+    $T_{\max}$ was reached without full convergence.
+    \item Compute station throughput and profit at the returned equilibrium.
+    \item For every station, perturb its price upward and downward and repeat
+    the inner solve to estimate the coordinate profit gradient.
+    \item Apply the clipped, projected gradient-ascent price update.
+    \item Repeat until the requested outer-step limit is reached or prices
+    remain stable for the requested number of converged iterations, then
+    perform one final equilibrium solve at the final prices.
+\end{enumerate}
+
+\section{What the final result means}
+
+The output is an approximate coupled equilibrium. On the user side, no used
+route has an incentive to move flow to a more expensive route. On the station
+side, the final price vector is the endpoint of projected profit-gradient
+updates and is interpreted as an approximate local strategic-price
+equilibrium when price changes are small. A result is numerically trustworthy
+only when all required inner solves satisfy the residual tolerance, route-flow
+conservation error is negligible, and no important route set was truncated.
+
+\end{document}

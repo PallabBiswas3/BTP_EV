@@ -59,7 +59,7 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
     fingerprint_payload = {
         "network": data,
         "path_settings": path_settings or {},
-        "builder_version": "bounded-routes-v2",
+        "builder_version": "bounded-routes-v3",
     }
     net.cache_fingerprint = hashlib.sha256(
         json.dumps(

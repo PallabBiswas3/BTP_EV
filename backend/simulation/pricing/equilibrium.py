@@ -13,30 +13,20 @@ documented at the point of change; summary:
    BDF also reaches the same steady state 2-5x faster than RK45, so
    switching to BDF is both a fidelity fix and a performance win.
 
-2. **Terminal convergence event.** Convergence uses the requested global L1
-   residual criterion, ``sum(abs(dstate/dt)) < 1e-9``. The integration stops
-   as soon as this criterion is reached, while a final post-hoc check verifies
-   the returned (and route-flow-projected) state.
+2. **Terminal convergence event.** Convergence uses the split L2 residual
+   criterion from ``sim3.py``, ``||x_dot||_2 + ||y_dot||_2 <= 1e-6``, where
+   ``x`` contains road and station states and ``y`` contains route-flow states.
+   The integration stops as soon as this criterion is reached, while a final
+   post-hoc check verifies the returned (and route-flow-projected) state.
 
 3. **Chunked integration with path-flow renormalization.** BDF advances in
    short chunks (50 time units by default), and the route-flow components are
-   projected after every chunk. This is the fix for a real
-   numerical failure mode this refactor uncovered. Eq. 22's replicator
-   dynamics analytically conserve sum(y_p) = lambda_c for every (OD, class)
-   group (d/dt[sum_p y_p] = eta*(avg*sum(y_p) - sum(y_p*cost_p)) = 0 by the
-   definition of `avg`), but a generic stiff-ODE solver only respects that
-   invariant approximately. On the bundled `i.json` network at a uniform
-   psi=0.5, this drift is negligible (~1e-3) out to t~900 of continuous
-   integration, then breaks down catastrophically by t~1065 (group sums
-   drift by up to -0.28 against a target of 0.6, and the affected
-   path-flow states diverge past 1e7 within a few more time units) as one
-   path's share approaches the boundary of the simplex -- a well-known
-   source of stiffness in replicator dynamics. This is the "replicator ODE
-   overflow at high demand multipliers" failure mode. Renormalizing the
-   path-flow components back onto their known constraint manifold after
-   every chunk is an exact, cheap correction (projecting onto where the
-   true solution already lives, not a model change) that keeps drift from
-   ever accumulating into the runaway regime.
+   projected after every chunk. Replicator average cost is normalized by the
+   current route-flow sum, so the vector field does not amplify a small
+   off-simplex numerical error. A generic stiff solver can still violate the
+   invariant slightly, especially near a simplex boundary, so projection
+   clips negative flows and restores each group to its known demand. This is
+   an exact, cheap correction onto the manifold where the true solution lives.
 
 4. **`y0` warm-starting.** Sec. III-B describes re-solving perturbed prices
    "with the unperturbed equilibrium as a warm start", which neither
@@ -47,8 +37,16 @@ documented at the point of change; summary:
    cheaper to reach -- and, combined with (3), it also means drift never
    gets the chance to accumulate across chained outer-loop steps.
 
+5. **Route-clock acceleration.** Small finite-difference price perturbations
+   create small path-cost gaps, so the replicator state can approach its fixed
+   point much more slowly than the physical traffic states. During equilibrium
+   integration only, route derivatives are multiplied by 20. Positive time
+   rescaling leaves every fixed point unchanged. Convergence is still measured
+   with the original, unscaled model derivative, and ordinary trajectory
+   simulation continues to use the configured `eta` without acceleration.
+
 `t_max` defaults to the paper's original 1000-unit maximum horizon. Every
-network is integrated until either the global L1 convergence criterion is met
+network is integrated until either the split L2 convergence criterion is met
 or that horizon is reached. A terminal event can stop inside a chunk; the
 projected state is always checked again before it is accepted as converged.
 Every solve additionally has a defensive fallback so a
@@ -63,6 +61,7 @@ from simulation.pricing import equilibrium_cache
 
 _INTEGRATION_CHUNK = 50.0
 _MAX_LOCAL_RESTARTS = 2
+_ROUTE_TIME_SCALE = 20.0
 
 
 class EquilibriumResult:
@@ -114,23 +113,54 @@ def _renormalize_path_flows(net, state):
     return state
 
 
-def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
+def _state_index_groups(net):
+    """Return physical-state and route-flow indices for the split L2 norm."""
+    x_idx = np.array(
+        [net.IDX[("xr", edge, cls)] for edge, cls in net.road_state_keys]
+        + [net.IDX[("xs", edge)] for edge in net.station_edges],
+        dtype=int,
+    )
+    y_idx = np.array(
+        [net.IDX[("y", pid)] for pid in net.path_state_keys],
+        dtype=int,
+    )
+    return x_idx, y_idx
+
+
+def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
     """Integrate the closed inner (traffic + routing) system to steady state.
 
     Returns an EquilibriumResult. `converged=False` means the residual
-    ||dx/dt||_1 was still above a practical threshold when `t_max` was hit;
+    ||x_dot||_2 + ||y_dot||_2 was still above a practical threshold when
+    `t_max` was hit;
     the state is still returned (it's typically accurate to 3-4 significant
     figures well before that point -- see module docstring) but the caller
     should surface the warning rather than silently trusting it as an exact
     fixed point.
     """
-    def rhs(t, state):
+    def model_rhs(t, state):
         return net.dynamics(t, state, psi_override=psi)
 
+    x_idx, y_idx = _state_index_groups(net)
+
+    def rhs(t, state):
+        """Accelerated integration field with the same equilibrium points."""
+        derivative = model_rhs(t, state)
+        if y_idx.size:
+            derivative[y_idx] *= _ROUTE_TIME_SCALE
+        return derivative
+
     def _residual(t, state):
-        """Global L1 norm of the complete closed-system derivative."""
-        value = float(np.linalg.norm(rhs(t, state), ord=1))
+        """Split L2 residual of the original, unscaled model dynamics."""
+        derivative = model_rhs(t, state)
+        x_dot_norm = np.linalg.norm(derivative[x_idx]) if x_idx.size else 0.0
+        y_dot_norm = np.linalg.norm(derivative[y_idx]) if y_idx.size else 0.0
+        value = float(x_dot_norm + y_dot_norm)
         return value if np.isfinite(value) else float("inf")
+
+    def _meets_tolerance(residual):
+        """Accept an event root despite insignificant floating-point error."""
+        return residual <= tol or np.isclose(residual, tol, rtol=1e-9, atol=0.0)
 
     def convergence_event(t, state):
         return _residual(t, state) - tol
@@ -143,7 +173,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
         cached_state, _stored_residual, _stored_conservation, cached_elapsed = cached
         residual = _residual(0.0, cached_state)
         conservation = _conservation_error(net, cached_state)
-        if residual < tol and conservation <= 1e-8:
+        if _meets_tolerance(residual) and conservation <= 1e-8:
             return EquilibriumResult(
                 cached_state, converged=True, residual=residual,
                 conservation_error=conservation, elapsed=cached_elapsed,
@@ -169,7 +199,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
         The terminal event is retained so a solve can stop between chunk
         boundaries. Because projecting route flows can slightly change the
         derivative, convergence is only accepted after projection and a fresh
-        global L1 residual evaluation.
+        split L2 residual evaluation.
         """
         state = np.asarray(y_start, dtype=float).copy()
         if state.shape != (net.N_STATES,) or not np.all(np.isfinite(state)):
@@ -178,7 +208,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
         state = _renormalize_path_flows(net, state)
         elapsed = 0.0
         residual = _residual(elapsed, state)
-        if residual < tol:
+        if _meets_tolerance(residual):
             return state, True, "", elapsed
 
         local_restarts = 0
@@ -212,7 +242,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
             progress = candidate_elapsed - elapsed
             elapsed = candidate_elapsed
             residual = _residual(elapsed, state)
-            if residual < tol:
+            if _meets_tolerance(residual):
                 return state, True, "", elapsed
 
             if not sol.success:
@@ -242,19 +272,19 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-9):
 
     def _finalize(state, elapsed, solver_message=""):
         residual = _residual(elapsed, state)
-        converged = bool(residual < tol)
+        converged = bool(_meets_tolerance(residual))
         if converged:
             msg = ""
         elif solver_message:
             msg = (
                 f"Inner BDF solve stopped at t={elapsed:g}: {solver_message} "
-                f"Residual ||dx/dt||_1={residual:.2e} did not meet "
-                f"the strict tolerance < {tol:.1e}."
+                f"Residual ||x_dot||_2+||y_dot||_2={residual:.2e} did not meet "
+                f"the tolerance <= {tol:.1e}."
             )
         else:
             msg = (
-                f"Residual ||dx/dt||_1={residual:.2e} did not meet "
-                f"the strict tolerance < {tol:.1e} after t={elapsed:g} "
+                f"Residual ||x_dot||_2+||y_dot||_2={residual:.2e} did not meet "
+                f"the tolerance <= {tol:.1e} after t={elapsed:g} "
                 f"(t_max={t_max})."
             )
         result = EquilibriumResult(

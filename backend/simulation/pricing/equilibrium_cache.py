@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 
-CACHE_MODEL_VERSION = "evcs-equilibrium-v1"
+CACHE_MODEL_VERSION = "evcs-equilibrium-v2"
 MAX_ENTRIES_PER_NETWORK = 512
 MAX_NEAREST_CANDIDATES = 128
 MAX_NEAREST_RMS_PRICE_DISTANCE = 0.35

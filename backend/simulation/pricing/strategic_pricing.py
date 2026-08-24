@@ -163,6 +163,10 @@ class _CoordinateGradientExecutor:
         self.gate_acquired = True
 
         try:
+            # Compute once in the parent and serialize the cached sparse
+            # pattern. Otherwise every spawned worker repeats the O(N) probe
+            # sweep independently on its private network copy.
+            self.net.jacobian_sparsity()
             network_blob = _pickle_network_for_workers(self.net)
             self.executor = ProcessPoolExecutor(
                 max_workers=workers,
@@ -252,13 +256,18 @@ def outer_loop(net, psi0=None, n_steps=30, kappa=0.1, delta=0.02,
     inner_results = []
     last_price_change = 0.0
     last_projected_price_change = 0.0
-    max_steps = n_steps
+    max_steps = min(n_steps, max_outer_steps)
     stable_steps = 0
     completed_steps = 0
     stop_reason = "fixed step count"
 
+    if progress_cb:
+        progress_cb(0, max_steps)
+
     with _CoordinateGradientExecutor(net, 2 * len(stations)) as gradient_executor:
         for step in range(max_steps):
+            if progress_cb:
+                progress_cb(step, max_steps)
             step_inner_start = len(inner_results)
             step_t_max = cold_t_max if state is None else continuation_t_max
             eq = solve_equilibrium(net, psi, y0=state, t_max=step_t_max)
@@ -335,6 +344,13 @@ def outer_loop(net, psi0=None, n_steps=30, kappa=0.1, delta=0.02,
 
             if progress_cb:
                 progress_cb(completed_steps, max_steps)
+
+            if stable_steps >= stable_outer_steps:
+                stop_reason = (
+                    f"price change <= {outer_tolerance:g} for "
+                    f"{stable_outer_steps} consecutive converged steps"
+                )
+                break
 
         gradient_execution = gradient_executor.execution
         gradient_workers = gradient_executor.workers

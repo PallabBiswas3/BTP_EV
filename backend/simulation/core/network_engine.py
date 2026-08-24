@@ -1,14 +1,11 @@
 """
 Core traffic / charging-station / pricing simulation engine.
 
-This module is preserved from the original research code almost verbatim.
-The mathematics (traffic dynamics, replicator routing, station buffer
-dynamics, path costs, equilibrium solving) is unchanged from the supplied
-`network_engine.py`.
-
-ONE deliberate correction was made, documented at the point of change:
-see `latency()` below. Everything else is byte-for-byte the same logic
-as the original file.
+This module retains the supplied model while adding backend-oriented path
+generation and numerical safeguards. Two mathematical details are deliberate:
+`latency()` uses road outflow ``a*x``, and replicator dynamics normalize the
+average cost by the current route-flow total so numerical simplex drift is not
+amplified between equilibrium-solver projections.
 """
 import numpy as np
 import scipy.sparse as sp
@@ -118,11 +115,38 @@ class ChargingNetwork:
                 edge_key[(u, v)] = key
         return simple, edge_key
 
-    def _k_shortest_edge_paths(self, graph, origin, dest, limit):
+    def _path_context(self, vehicle_class):
+        """Build each class-filtered path-search graph only once per build."""
+        cached = self._path_context_cache.get(vehicle_class)
+        if cached is not None:
+            return cached
+
+        allowed = [
+            (u, v, key)
+            for u, v, key, attrs in self.G.edges(keys=True, data=True)
+            if vehicle_class in attrs["classes"]
+        ]
+        roads = [edge for edge in allowed if self.G.edges[edge]["kind"] == "road"]
+        stations = tuple(
+            edge for edge in allowed if self.G.edges[edge]["kind"] == "station"
+        )
+        simple, edge_key = self._as_simple_digraph(self.G.edge_subgraph(roads))
+        cached = (simple, edge_key, stations)
+        self._path_context_cache[vehicle_class] = cached
+        return cached
+
+    def _k_shortest_edge_paths(self, vehicle_class, origin, dest, limit):
         if origin == dest:
             return [[]]
-        simple, edge_key = self._as_simple_digraph(graph)
+
+        cache_key = (vehicle_class, origin, dest, int(limit))
+        cached = self._path_segment_cache.get(cache_key)
+        if cached is not None:
+            return [list(path) for path in cached]
+
+        simple, edge_key, _stations = self._path_context(vehicle_class)
         if origin not in simple or dest not in simple:
+            self._path_segment_cache[cache_key] = ()
             return []
         paths = []
         try:
@@ -131,12 +155,17 @@ class ChargingNetwork:
                     (nodes[i], nodes[i + 1], edge_key[(nodes[i], nodes[i + 1])])
                     for i in range(len(nodes) - 1)
                 ])
-                if len(paths) > limit:
-                    self._path_search_truncated = True
+                # Do not request a (limit + 1)-th path merely to prove that
+                # alternatives exist. On large cyclic graphs that extra yield
+                # can dominate all useful path-search work.
+                if len(paths) >= limit:
                     break
         except (nx.NetworkXNoPath, nx.NodeNotFound):
+            self._path_segment_cache[cache_key] = ()
             return []
-        return paths[:limit]
+        frozen = tuple(tuple(path) for path in paths)
+        self._path_segment_cache[cache_key] = frozen
+        return paths
 
     def _free_flow_path_cost(self, edges):
         total = 0.0
@@ -152,27 +181,21 @@ class ChargingNetwork:
         Keeping only realistic shortest alternatives avoids the exponential
         all-simple-path explosion on cyclic road networks.
         """
-        allowed = [
-            (u, v, key) for u, v, key, attrs in self.G.edges(keys=True, data=True)
-            if vehicle_class in attrs["classes"]
-        ]
-        roads = [edge for edge in allowed if self.G.edges[edge]["kind"] == "road"]
-        stations = [edge for edge in allowed if self.G.edges[edge]["kind"] == "station"]
-        road_graph = self.G.edge_subgraph(roads)
+        _simple, _edge_key, stations = self._path_context(vehicle_class)
 
         if not stations:
             return self._k_shortest_edge_paths(
-                road_graph, od["origin"], od["dest"], self.max_paths_per_group,
+                vehicle_class, od["origin"], od["dest"], self.max_paths_per_group,
             )
 
         candidates_by_station = []
         for station_edge in stations:
             u_station, v_station, _ = station_edge
             before = self._k_shortest_edge_paths(
-                road_graph, od["origin"], u_station, self.k_per_segment,
+                vehicle_class, od["origin"], u_station, self.k_per_segment,
             )
             after = self._k_shortest_edge_paths(
-                road_graph, v_station, od["dest"], self.k_per_segment,
+                vehicle_class, v_station, od["dest"], self.k_per_segment,
             )
             candidates = []
             seen = set()
@@ -196,6 +219,8 @@ class ChargingNetwork:
         # Preserve station diversity first, then fill the remaining route
         # budget with the best alternatives across all reachable stations.
         selected = [paths[0] for paths in candidates_by_station]
+        if len(selected) > self.max_paths_per_group:
+            self._path_search_truncated = True
         remaining = [path for paths in candidates_by_station for path in paths[1:]]
         remaining.sort(key=self._free_flow_path_cost)
         remaining_slots = max(0, self.max_paths_per_group - len(selected))
@@ -211,6 +236,8 @@ class ChargingNetwork:
         self.path_od = {}
         self.groups = {}
         self.route_limit_hits = []
+        self._path_context_cache = {}
+        self._path_segment_cache = {}
 
         for od in self.ods:
             for c in self.classes:
@@ -246,6 +273,11 @@ class ChargingNetwork:
                     self.path_od[pid] = od["name"]
                     pids.append(pid)
                 self.groups[(od["name"], c)] = pids
+
+        # These caches accelerate construction only. Dropping them keeps the
+        # built network smaller when it is copied to gradient worker processes.
+        self._path_context_cache.clear()
+        self._path_segment_cache.clear()
 
         self.edge_users = defaultdict(list)
         self.edge_injects = defaultdict(list)
@@ -485,10 +517,13 @@ class ChargingNetwork:
             cost = self._path_costs(d, t, psi_override)
             eta = p["eta"]
             for key, pids in self.game_groups.items():
-                total_lam = lam[key]
                 ys = np.array([d["y"][pid] for pid in pids])
                 costs = np.array([cost[pid] for pid in pids])
-                avg = np.dot(ys, costs) / total_lam if total_lam > 1e-12 else 0.0
+                current_total = ys.sum()
+                avg = (
+                    np.dot(ys, costs) / current_total
+                    if current_total > 1e-12 else 0.0
+                )
                 for pid, y_val, c_val in zip(pids, ys, costs):
                     out[self.IDX[("y", pid)]] = eta * y_val * (avg - c_val)
         return out

@@ -124,8 +124,9 @@ background/offline calculation; the API continues to publish job progress.
 
 Profiles now differ only in their candidate-route budgets. Every network and
 profile uses a chunked inner solve of up to 1000 time units and coordinate
-central differences. The inner solve stops early when the global L1 derivative
-norm is below `1e-9`. `research` remains the strictest route-set estimate. The
+central differences. The inner solve stops early when the sum of the physical-
+state and route-flow L2 derivative norms is below `1e-6`. `research` remains
+the strictest route-set estimate. The
 response includes a quality block with route-cap hits,
 inner residuals, path-flow conservation error, gradient method, and a
 `certified` flag. A run is certified only when every nominal and
@@ -133,9 +134,10 @@ gradient-perturbation solve meets tolerance, no OD/class group reaches an
 internal candidate-route cap, and the final outer-loop price change is at most
 `1e-4`.
 
-For every network, `n_steps` is the exact outer-loop iteration count. The
-`outer_tolerance` value still determines whether the completed run is labeled
-outer-converged, but it does not stop or extend the fixed iteration loop.
+`n_steps` is the maximum requested outer-loop iteration count (also bounded by
+`max_outer_steps`). The loop stops early after `stable_outer_steps` consecutive
+fully converged iterations whose projected price change is at most
+`outer_tolerance`.
 
 The original builder enumerated every simple path for every OD pair and
 vehicle class. That works for the small paper topology, but path counts grow
@@ -144,6 +146,14 @@ combinatorially on cyclic road networks. The bundled 24-node, 76-road,
 under unrestricted enumeration, producing roughly 87,000 route-flow states.
 
 The backend now uses the following strategy for every network size.
+
+- The interactive `preview` profile keeps one best road prefix and suffix per
+  reachable station, preserving station competition without enumerating
+  alternative segments that will not be displayed.
+- Each class-filtered road graph is constructed once per network build, and
+  repeated origin/station/destination segment queries reuse cached paths.
+- Path search stops immediately after collecting the requested number of
+  paths; it does not generate an extra path solely to detect truncation.
 
 ### 1. Bounded, class-feasible route sets
 
@@ -189,12 +199,17 @@ product instead of recomputing a road latency for every path that uses it.
 
 ### 3. Chunked integration and route-flow projection
 
-Replicator dynamics analytically preserve
-`sum(path flows) = OD/class demand`, but a long numerical solve can drift away
-from that simplex and eventually make BDF fail with a required-step-size error.
+Replicator dynamics normalize average cost by the current route-flow sum, so
+their vector field preserves each group's total even after a small numerical
+deviation. BDF can still introduce minor simplex error near a boundary.
 
-`solve_equilibrium()` advances BDF in 50-time-unit chunks until the global L1
-derivative norm is below `1e-9` or the requested maximum horizon is reached.
+`solve_equilibrium()` advances BDF in 50-time-unit chunks until
+`||x_dot||_2 + ||y_dot||_2` is below `1e-6` or the requested maximum horizon
+is reached.
+For equilibrium integration only, route-choice derivatives are time-scaled by
+20 so small price perturbations do not require thousands of simulated time
+units to settle. This positive scaling does not change fixed points, and the
+terminal residual is evaluated using the original unscaled model dynamics.
 After every chunk it clips negative path flows and renormalizes every OD/class
 group to its known demand, then re-evaluates the residual. A finite late BDF
 failure resumes locally from its projected endpoint instead of discarding all
@@ -207,7 +222,7 @@ solve starts from the preceding equilibrium estimate because consecutive
 price profiles are close.
 
 - Every cold, continuation, and perturbation solve uses the same configured
-  maximum horizon (1000 time units by default) and L1 terminal event.
+  maximum horizon (1000 time units by default) and split L2 terminal event.
 
 Residual warnings remain visible in the API response and frontend.
 

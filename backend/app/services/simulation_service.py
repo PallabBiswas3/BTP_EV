@@ -42,7 +42,9 @@ def _network_options_to_kwargs(opts) -> dict:
 
 
 PATH_PROFILES = {
-    "preview": dict(k_per_segment=4, k_per_station=2, max_paths_per_group=8),
+    # Preserve station competition, but avoid costly alternative-segment
+    # enumeration on large cyclic graphs in the interactive profile.
+    "preview": dict(k_per_segment=1, k_per_station=1, max_paths_per_group=8),
     "balanced": dict(k_per_segment=6, k_per_station=4, max_paths_per_group=16),
     "research": dict(k_per_segment=10, k_per_station=8, max_paths_per_group=32),
 }
