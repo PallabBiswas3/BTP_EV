@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Background,
   BaseEdge,
@@ -73,11 +73,11 @@ function CleanEdge({
   const offset = edgeData?.parallelOffset ?? 0
   const ox = (-dy / length) * offset
   const oy = (dx / length) * offset
-  const sx = sourceX + ox
-  const sy = sourceY + oy
-  const tx = targetX + ox
-  const ty = targetY + oy
-  const path = `M ${sx},${sy} L ${tx},${ty}`
+  const controlX = (sourceX + targetX) / 2 + ox * 2
+  const controlY = (sourceY + targetY) / 2 + oy * 2
+  const labelX = (sourceX + targetX) / 2 + ox
+  const labelY = (sourceY + targetY) / 2 + oy
+  const path = `M ${sourceX},${sourceY} Q ${controlX},${controlY} ${targetX},${targetY}`
 
   return (
     <>
@@ -93,7 +93,7 @@ function CleanEdge({
           <div
             className={`clean-edge-label ${edgeData.labelTone ?? ''}`}
             style={{
-              transform: `translate(-50%, -50%) translate(${(sx + tx) / 2}px,${(sy + ty) / 2}px)`,
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
             }}
           >
             {edgeData.displayLabel}
@@ -134,26 +134,57 @@ export default function NetworkGraph({
   onSelectStation,
 }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
+  const activeNodeId = focusedNodeId ?? hoveredNodeId
   const layout = useMemo(() => computeLayout(network), [network])
 
-  const nodes: Node[] = useMemo(() => (
-    [...layout.entries()].map(([id, pos]) => {
+  // A newly loaded scenario may not contain the previously hovered/selected
+  // node. Clear transient graph UI so stale focus cannot fade the new graph.
+  useEffect(() => {
+    setTooltip(null)
+    setHoveredEdgeId(null)
+    setHoveredNodeId(null)
+    setFocusedNodeId(null)
+  }, [network])
+
+  const nodes: Node[] = useMemo(() => {
+    const focusNeighbourhood = new Set<string>()
+    if (focusedNodeId) {
+      focusNeighbourhood.add(focusedNodeId)
+      network.roads.forEach((road) => {
+        if (road.u === focusedNodeId || road.v === focusedNodeId) {
+          focusNeighbourhood.add(road.u)
+          focusNeighbourhood.add(road.v)
+        }
+      })
+      network.stations.forEach((station) => {
+        if (station.u === focusedNodeId || station.v === focusedNodeId) {
+          focusNeighbourhood.add(station.u)
+          focusNeighbourhood.add(station.v)
+        }
+      })
+    }
+
+    return [...layout.entries()].map(([id, pos]) => {
       const isOrigin = network.ods.some((od) => od.origin === id)
       const isDestination = network.ods.some((od) => od.dest === id)
+      const roleClass = isOrigin
+        ? 'origin-node'
+        : isDestination
+          ? 'destination-node'
+          : 'junction-node'
       return {
         id,
         type: 'clean',
         position: { x: pos.x, y: pos.y },
         data: { label: id },
-        className: isOrigin
-          ? 'origin-node'
-          : isDestination
-            ? 'destination-node'
-            : 'junction-node',
+        className: `${roleClass}${focusedNodeId === id ? ' focused-node' : focusedNodeId && !focusNeighbourhood.has(id) ? ' dimmed-node' : ''}`,
         draggable: false,
       }
     })
-  ), [layout, network.ods])
+  }, [layout, network.ods, network.roads, network.stations, focusedNodeId])
 
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = []
@@ -183,6 +214,7 @@ export default function NetworkGraph({
 
     network.roads.forEach((road, i) => {
       const label = `${road.u}->${road.v}`
+      const edgeId = `road:${i}:${label}`
       const rt = trajectory?.roads[label]
       const isNevOnly = Boolean(road.classes && !road.classes.includes('EV'))
       let intensity = 0
@@ -204,9 +236,12 @@ export default function NetworkGraph({
       const seen = roadSeen.get(key) ?? 0
       const count = roadCounts.get(key) ?? 1
       roadSeen.set(key, seen + 1)
+      const connectedToFocus = !activeNodeId || road.u === activeNodeId || road.v === activeNodeId
+      const hasVisibleFlow = Boolean(rt && idx >= 0 && xValue > 0.005)
+      const showLabel = hoveredEdgeId === edgeId || hasVisibleFlow
 
       out.push({
-        id: `road:${i}:${label}`,
+        id: edgeId,
         source: road.u,
         target: road.v,
         ...handles(road.u, road.v),
@@ -216,7 +251,7 @@ export default function NetworkGraph({
         style: {
           stroke: isNevOnly ? '#9c8256' : '#8b8b87',
           strokeWidth: 1.35 + intensity * 4.5,
-          opacity: 0.72 + intensity * 0.28,
+          opacity: connectedToFocus ? (hasVisibleFlow ? 0.62 + intensity * 0.38 : 0.28) : 0.07,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -229,14 +264,15 @@ export default function NetworkGraph({
           label,
           road,
           rt,
-          displayLabel: `x ${xValue.toFixed(2)}`,
+          displayLabel: showLabel ? `x ${xValue.toFixed(2)}` : undefined,
           labelTone: 'road',
-          parallelOffset: (seen - (count - 1) / 2) * 7,
+          parallelOffset: (seen - (count - 1) / 2) * 14,
         } satisfies CleanEdgeData,
       })
     })
 
     network.stations.forEach((station, i) => {
+      const edgeId = `station:${i}:${station.name}`
       const st = trajectory?.stations[station.name]
       const occupancy = st && idx >= 0 ? st.occupancy[idx] : undefined
       const saturation = st?.saturation_K
@@ -249,9 +285,11 @@ export default function NetworkGraph({
       const roadCount = roadCounts.get(key) ?? 0
       const selected = selectedStation === station.name
       const color = stationColor(station.name)
+      const connectedToFocus = !activeNodeId || station.u === activeNodeId || station.v === activeNodeId
+      const showValue = selected || hoveredEdgeId === edgeId || intensity > 0.02
 
       out.push({
-        id: `station:${i}:${station.name}`,
+        id: edgeId,
         source: station.u,
         target: station.v,
         ...handles(station.u, station.v),
@@ -261,7 +299,7 @@ export default function NetworkGraph({
         style: {
           stroke: color,
           strokeWidth: (selected ? 4.5 : 2.8) + intensity * 2.4,
-          opacity: 1,
+          opacity: connectedToFocus ? 1 : 0.1,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -273,7 +311,7 @@ export default function NetworkGraph({
           kind: 'station',
           station,
           st,
-          displayLabel: `${station.name} · x ${(occupancy ?? 0).toFixed(2)}`,
+          displayLabel: showValue ? `${station.name} · x ${(occupancy ?? 0).toFixed(2)}` : station.name,
           labelTone: isSharedStation(station.name) ? 'shared' : 'private',
           parallelOffset: (roadCount > 0 ? 11 : 0) + stationIndex * 8,
         } satisfies CleanEdgeData,
@@ -281,9 +319,10 @@ export default function NetworkGraph({
     })
 
     return out
-  }, [network, trajectory, timeIndex, mode, selectedStation, layout])
+  }, [network, trajectory, timeIndex, mode, selectedStation, layout, hoveredEdgeId, activeNodeId])
 
   const showTooltip = (event: React.MouseEvent, edge: Edge) => {
+    setHoveredEdgeId(edge.id)
     const rect = (event.target as HTMLElement)
       .closest('.network-shell')
       ?.getBoundingClientRect()
@@ -325,6 +364,35 @@ export default function NetworkGraph({
     }
   }
 
+  const showNodeTooltip = (event: React.MouseEvent, node: Node) => {
+    setHoveredNodeId(node.id)
+    const rect = (event.target as HTMLElement)
+      .closest('.network-shell')
+      ?.getBoundingClientRect()
+    const x = rect ? event.clientX - rect.left + 12 : event.clientX
+    const y = rect ? event.clientY - rect.top + 12 : event.clientY
+    const originOds = network.ods.filter((od) => od.origin === node.id).map((od) => od.name)
+    const destinationOds = network.ods.filter((od) => od.dest === node.id).map((od) => od.name)
+    const outgoing = [...new Set(network.roads.filter((road) => road.u === node.id).map((road) => road.v))]
+    const incoming = [...new Set(network.roads.filter((road) => road.v === node.id).map((road) => road.u))]
+    const stations = network.stations.filter((station) => station.u === node.id || station.v === node.id)
+    const role = [
+      originOds.length > 0 ? `origin (${originOds.join(', ')})` : '',
+      destinationOds.length > 0 ? `destination (${destinationOds.join(', ')})` : '',
+    ].filter(Boolean).join(' · ') || 'junction'
+    const summarize = (values: string[]) => values.length > 6
+      ? `${values.slice(0, 6).join(', ')}, +${values.length - 6} more`
+      : values.join(', ')
+    const lines = [
+      `role: ${role}`,
+      `roads: ${incoming.length} incoming · ${outgoing.length} outgoing`,
+    ]
+    if (outgoing.length > 0) lines.push(`to: ${summarize(outgoing)}`)
+    if (incoming.length > 0) lines.push(`from: ${summarize(incoming)}`)
+    if (stations.length > 0) lines.push(`stations: ${summarize(stations.map((station) => station.name))}`)
+    setTooltip({ x, y, title: `Node ${node.id}`, lines })
+  }
+
   return (
     <div className="network-shell">
       <ReactFlow
@@ -339,7 +407,21 @@ export default function NetworkGraph({
         proOptions={{ hideAttribution: true }}
         onEdgeMouseEnter={showTooltip}
         onEdgeMouseMove={showTooltip}
-        onEdgeMouseLeave={() => setTooltip(null)}
+        onEdgeMouseLeave={() => {
+          setTooltip(null)
+          setHoveredEdgeId(null)
+        }}
+        onNodeMouseEnter={showNodeTooltip}
+        onNodeMouseMove={showNodeTooltip}
+        onNodeMouseLeave={() => {
+          setTooltip(null)
+          setHoveredNodeId(null)
+        }}
+        onNodeClick={(_, node) => setFocusedNodeId(node.id === focusedNodeId ? null : node.id)}
+        onPaneClick={() => {
+          setFocusedNodeId(null)
+          setHoveredNodeId(null)
+        }}
         onEdgeClick={(_, edge) => {
           const data = edge.data as CleanEdgeData | undefined
           if (data?.kind === 'station' && data.station) {
@@ -350,6 +432,8 @@ export default function NetworkGraph({
         <Background gap={24} size={0.7} color="#e7e4dc" />
         <Controls showInteractive={false} />
       </ReactFlow>
+
+      <div className="network-hint">Hover for details · Click a node to lock focus</div>
 
       {tooltip && (
         <div className="graph-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>

@@ -179,8 +179,13 @@ h3 { font-size: 13.5px; font-weight: 600; }
 .react-flow__node.origin-node { background: #4caf50; border-color: #246b2a; color: #102c13; }
 .react-flow__node.destination-node { background: #ff7043; border-color: #a83218; color: #3b1008; }
 .react-flow__node.junction-node { background: #fff; border-color: #292929; color: #171717; }
+.react-flow__node { transition: opacity .16s ease, box-shadow .16s ease, transform .16s ease; cursor: pointer; }
+.react-flow__node:hover { box-shadow: 0 0 0 4px rgba(24, 93, 79, .14) !important; z-index: 4 !important; }
+.react-flow__node.focused-node { box-shadow: 0 0 0 4px rgba(24, 93, 79, .2) !important; z-index: 4 !important; }
+.react-flow__node.dimmed-node { opacity: .34; }
 .react-flow__handle { width: 1px !important; height: 1px !important; min-width: 1px !important; min-height: 1px !important; opacity: 0; border: 0; pointer-events: none; }
 .react-flow__edge-path { stroke: #8b8b87; cursor: pointer; }
+.react-flow__edge-path { transition: opacity .16s ease, stroke-width .16s ease; }
 .react-flow__edge.nev-edge .react-flow__edge-path { stroke: var(--nev); stroke-dasharray: 5 4; }
 .react-flow__edge.station-edge .react-flow__edge-path { cursor: pointer; }
 .react-flow__edge.selected-edge .react-flow__edge-path { filter: drop-shadow(0 0 3px rgba(28, 25, 23, .55)); }
@@ -202,6 +207,12 @@ h3 { font-size: 13.5px; font-weight: 600; }
   max-width: 240px; box-shadow: 0 6px 18px rgba(0,0,0,.18);
 }
 .graph-tooltip b { display: block; font-family: 'IBM Plex Sans'; font-size: 12px; margin-bottom: 3px; }
+.network-hint {
+  position: absolute; left: 50%; bottom: 9px; z-index: 5; transform: translateX(-50%);
+  padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px;
+  background: rgba(255,255,255,.9); color: var(--muted); font-size: 10px;
+  pointer-events: none; white-space: nowrap;
+}
 
 .timeline-row { display: grid; grid-template-columns: auto 1fr 46px; align-items: center; gap: 12px; padding-top: 12px; color: var(--muted); font-size: 12px; }
 .timeline-row input { accent-color: var(--accent); }
