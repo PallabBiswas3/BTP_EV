@@ -33,7 +33,7 @@ export default function ControlsPanel({
     onNetworkChange({ ...network, defaults: { ...network.defaults, [key]: value } })
   }
 
-  const setOption = (key: keyof SimulationOptions, value: number | SimulationOptions['accuracy_mode']) => {
+  const setOption = <K extends keyof SimulationOptions,>(key: K, value: SimulationOptions[K]) => {
     onOptionsChange({ ...options, [key]: value })
   }
 
@@ -154,25 +154,32 @@ export default function ControlsPanel({
         </div>
         {solverOpen && (
           <div style={{ marginTop: 12 }}>
-            <label>Accuracy profile
-              <select
-                value={options.accuracy_mode}
-                onChange={(e) => setOption('accuracy_mode', e.target.value as SimulationOptions['accuracy_mode'])}
-              >
-                <option value="preview">Preview - interactive default</option>
-                <option value="balanced">Balanced - stronger estimate</option>
-                <option value="research">Research - strictest</option>
-              </select>
-            </label>
             <p className="muted" style={{ marginTop: 6, marginBottom: 12 }}>
-              Profiles control candidate-route limits. All profiles use the same L1 stopping criterion and station-by-station gradients.
+              Each station tests two prices, then traffic advances one interval. The run ends after round(t_end / h) updates.
             </p>
             <div className="two-col-form">
-            <label>Pricing steps
-              <input type="number" min={1} max={200} value={options.n_steps} onChange={(e) => setOption('n_steps', Number(e.target.value))} />
+            <label>Traffic interval h
+              <input type="number" min={0.01} step="any" value={options.h} onChange={(e) => setOption('h', Number(e.target.value))} />
             </label>
-            <label>Price-change tolerance
-              <input type="number" min={0.000001} max={0.1} step={0.0001} value={options.outer_tolerance} onChange={(e) => setOption('outer_tolerance', Number(e.target.value))} />
+            <label>Prediction mode
+              <select value={options.ctrl_horizon === 'eq' ? 'eq' : 'finite'}
+                onChange={(e) => setOption('ctrl_horizon', e.target.value === 'eq' ? 'eq' : 10)}>
+                <option value="finite">Finite horizon</option>
+                <option value="eq">Equilibrium forecast</option>
+              </select>
+            </label>
+            {options.ctrl_horizon !== 'eq' && <label>Look-ahead intervals
+              <input type="number" min={1} step={1} value={options.ctrl_horizon} onChange={(e) => setOption('ctrl_horizon', Number(e.target.value))} />
+            </label>}
+            {options.ctrl_horizon === 'eq' && <label>Equilibrium horizon
+              <input type="number" min={0.01} step="any" value={options.eq_t_max} onChange={(e) => setOption('eq_t_max', Number(e.target.value))} />
+            </label>}
+            <label>Forecast profit
+              <select value={options.profit_mode} disabled={options.ctrl_horizon === 'eq'}
+                onChange={(e) => setOption('profit_mode', e.target.value as 'end' | 'mean')}>
+                <option value="end">At horizon end</option>
+                <option value="mean">Mean of samples</option>
+              </select>
             </label>
             <label>Sim. time t_end
               <input type="number" min={1} value={options.t_end} onChange={(e) => setOption('t_end', Number(e.target.value))} />
@@ -184,7 +191,22 @@ export default function ControlsPanel({
               <input type="number" step="0.005" value={options.delta} onChange={(e) => setOption('delta', Number(e.target.value))} />
             </label>
             <label>Price cap ψ_max
-              <input type="number" step="0.1" value={options.psi_max} onChange={(e) => setOption('psi_max', Number(e.target.value))} />
+              <input type="number" min={0.01} step="any" placeholder="No cap" value={options.psi_max ?? ''} onChange={(e) => setOption('psi_max', e.target.value === '' ? null : Number(e.target.value))} />
+            </label>
+            <label>Gradient clip
+              <input type="number" min={0.01} step="any" placeholder="No clipping" value={options.grad_clip ?? ''} onChange={(e) => setOption('grad_clip', e.target.value === '' ? null : Number(e.target.value))} />
+            </label>
+            <label>Parallel forecasts
+              <select value={options.parallel === null ? 'auto' : options.parallel ? 'on' : 'off'}
+                onChange={(e) => setOption('parallel', e.target.value === 'auto' ? null : e.target.value === 'on')}>
+                <option value="auto">Auto (equilibrium only)</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+            <label>Worker processes
+              <input type="number" min={1} step={1} placeholder="Auto" value={options.n_workers ?? ''}
+                onChange={(e) => setOption('n_workers', e.target.value === '' ? null : Number(e.target.value))} />
             </label>
             <label>Outer step dt
               <input type="number" step="0.1" value={options.dt_outer} onChange={(e) => setOption('dt_outer', Number(e.target.value))} />
@@ -205,8 +227,8 @@ export default function ControlsPanel({
       </div>
 
       <div className="formula-box">
-        <span>Inner loop</span>
-        <strong>ẋ, ẏ → 0</strong>
+        <span>Traffic prediction</span>
+        <strong>Advance h × horizon</strong>
         <span>Outer loop</span>
         <strong>ψ ← ψ + κ ∂π/∂ψ</strong>
       </div>

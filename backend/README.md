@@ -2,6 +2,26 @@
 
 FastAPI service around the original research simulation code.
 
+## Current custom-network approach: predictive pricing
+
+The active backend now follows the supplied `dynamic-ev-pricing/sim.py`:
+two forecasts per station from the current state, simultaneous price updates,
+and one physical-time traffic interval per update. Defaults are `t_end=75000`,
+`h=1500`, `ctrl_horizon=10`, `profit_mode="end"`; price caps and gradient
+clipping default to disabled. `/simulate` returns a physical-time trajectory.
+The historical `equilibrium` response key denotes a dynamic endpoint.
+
+[Predictive pricing migration](../docs/predictive_pricing_migration.md) is the
+current reference for API settings, numerical behavior, source parity tests,
+runtime considerations, and the complete previous/new comparison.
+
+The sections below record the **previous equilibrium-based implementation**
+and remain relevant to the preserved paper experiments. Their profile tables,
+equilibrium trajectory descriptions and older runtime figures do not describe
+current custom-network predictive runs. Server startup, job polling, network
+JSON structure and deployment instructions still apply; demand schedules are
+now additionally supported.
+
 ## Layout
 
 ```
@@ -71,22 +91,15 @@ Interactive API docs are at `/docs` once the server is running.
 
 ## Notable engineering decisions (read before changing the math)
 
-`simulation/pricing/equilibrium.py`'s module docstring documents four
-changes made to the original `solve_equilibrium`/`outer_loop` and the
-reasoning behind each — switching the integrator to BDF (matching what the
-paper's methods section actually claims, and 2-5x faster than the RK45 the
-supplied code used), removing a convergence-event that in practice never
-fired, adding `y0` warm-starting, and — the one that matters most — a path-
-flow renormalization that fixes a genuine numerical instability ("replicator
-ODE overflow at high demand") this refactor traced to slow drift away from
-the replicator dynamics' analytic conservation invariant. `t_max` defaults
-were tuned against the *unmodified* original code as ground truth (see the
-same docstring) to make sure none of this changed the actual equilibrium
-values the paper reports, only how fast and how reliably they're reached.
+`simulation/pricing/equilibrium.py` follows the supplied `sim4.py` BDF model,
+split residual, tolerances, maximum step, and 75000-unit default horizon. The
+backend surrounds that model with chunked path-flow renormalization, verified
+warm starts, persistent caching, sparse-Jacobian support, and defensive result
+metadata for a live API.
 
-`simulation/core/network_engine.py` also includes the latency correction,
-bounded class-feasible path generation, and a cached sparse-Jacobian pattern.
-These changes are documented below and in the module docstrings.
+`simulation/core/network_engine.py` computes road flow as `f = a*x` and uses
+`f/L` in the road-latency formula. It also adds bounded class-feasible path
+generation plus a cached sparse-Jacobian pattern.
 
 ## Unified optimized equilibrium approach
 

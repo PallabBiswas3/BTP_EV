@@ -28,9 +28,9 @@ export default function EVAdoption({ result, running, onRun }: Props) {
   return (
     <div>
       <p className="muted" style={{ marginBottom: 12 }}>
-        Reproduces the paper-style sensitivity sweep: re-solves the full strategic-pricing equilibrium at each
-        EV demand fraction β, holding total per-OD inflow fixed. This is a separate, independent solve from
-        "Run simulation" above — it re-optimizes prices from scratch at every β.
+        Runs the predictive pricing simulation independently at each EV demand fraction β,
+        retaining the same total per-OD demand schedule. Charts compare final simulated states
+        after the configured physical duration; each run starts from scratch.
       </p>
       <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', marginBottom: 16, flexWrap: 'wrap' }}>
         <label className="mono muted" style={{ fontSize: 11 }}>β min
@@ -56,21 +56,21 @@ export default function EVAdoption({ result, running, onRun }: Props) {
       ) : (
         <div className="charts-grid">
           <div className="chart-card">
-            <div className="chart-title-row"><h3>Equilibrium price</h3><span className="mono muted">ψ*_s(β)</span></div>
+            <div className="chart-title-row"><h3>Final price</h3><span className="mono muted">ψ_s(β)</span></div>
             <div className="chart-area">
               <LineSeriesChart x={result.beta} xLabel="EV demand fraction β" yLabel="ψ*"
                 series={result.stations.map((s) => ({ id: s, label: s, color: colorForStation(result.stations, s), values: result.prices[s] }))} />
             </div>
           </div>
           <div className="chart-card">
-            <div className="chart-title-row"><h3>Equilibrium throughput</h3><span className="mono muted">ρ*_s(β)</span></div>
+            <div className="chart-title-row"><h3>Final throughput</h3><span className="mono muted">ρ_s(β)</span></div>
             <div className="chart-area">
               <LineSeriesChart x={result.beta} xLabel="β" yLabel="ρ*"
                 series={result.stations.map((s) => ({ id: s, label: s, color: colorForStation(result.stations, s), values: result.throughputs[s] }))} />
             </div>
           </div>
           <div className="chart-card">
-            <div className="chart-title-row"><h3>Equilibrium occupancy</h3><span className="mono muted">x*_s(β)</span></div>
+            <div className="chart-title-row"><h3>Final occupancy</h3><span className="mono muted">x_s(β)</span></div>
             <div className="chart-area">
               <LineSeriesChart x={result.beta} xLabel="β" yLabel="x*"
                 series={result.stations.map((s) => ({ id: s, label: s, color: colorForStation(result.stations, s), values: result.occupancies[s] }))} />
@@ -90,7 +90,7 @@ export default function EVAdoption({ result, running, onRun }: Props) {
       )}
       {result?.warnings.length ? (
         <div className="warning-banner" style={{ marginTop: 12 }}>
-          {result.warnings.length} equilibrium solve(s) in this sweep didn't fully converge to the practical tolerance; values are still typically accurate to 3-4 significant figures.
+          {result.warnings.join(' ')}
         </div>
       ) : null}
     </div>

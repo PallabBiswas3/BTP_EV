@@ -6,12 +6,9 @@ Extracted from the two near-identical copies in `simulator_paper.py` and
 original scripts were only ever run once, offline, from the CLI). Each is
 documented at the point of change; summary:
 
-1. **Integrator: RK45 -> BDF.** The paper's own numerical-methods section
-   (Sec. IV: "All simulations were performed in Python using SciPy's BDF
-   integrator for the inner closed-loop dynamics") does not match the
-   supplied code, which used `method="RK45"`. Measured on these networks,
-   BDF also reaches the same steady state 2-5x faster than RK45, so
-   switching to BDF is both a fidelity fix and a performance win.
+1. **BDF integration.** The supplied ``sim4.py`` uses SciPy's BDF integrator
+   for the inner closed-loop dynamics. The backend retains BDF while adding
+   chunked integration and sparse-Jacobian support.
 
 2. **Terminal convergence event.** Convergence uses the split L2 residual
    criterion from ``sim3.py``, ``||x_dot||_2 + ||y_dot||_2 <= 1e-6``, where
@@ -28,24 +25,11 @@ documented at the point of change; summary:
    clips negative flows and restores each group to its known demand. This is
    an exact, cheap correction onto the manifold where the true solution lives.
 
-4. **`y0` warm-starting.** Sec. III-B describes re-solving perturbed prices
-   "with the unperturbed equilibrium as a warm start", which neither
-   original script actually implements (both call `solve_equilibrium(net,
-   psi)` with no `y0` at every step, always cold-starting). This is a
-   performance-only change: the ODE is unchanged and the steady state
-   doesn't depend on the starting point, so results are identical, just
-   cheaper to reach -- and, combined with (3), it also means drift never
-   gets the chance to accumulate across chained outer-loop steps.
+4. **`y0` warm-starting.** The supplied ``sim4.py`` reuses the unperturbed
+   equilibrium for nominal and finite-difference solves. The backend preserves
+   that behavior and can additionally warm-start from its equilibrium cache.
 
-5. **Route-clock acceleration.** Small finite-difference price perturbations
-   create small path-cost gaps, so the replicator state can approach its fixed
-   point much more slowly than the physical traffic states. During equilibrium
-   integration only, route derivatives are multiplied by 20. Positive time
-   rescaling leaves every fixed point unchanged. Convergence is still measured
-   with the original, unscaled model derivative, and ordinary trajectory
-   simulation continues to use the configured `eta` without acceleration.
-
-`t_max` defaults to the paper's original 1000-unit maximum horizon. Every
+`t_max` defaults to the supplied ``sim4.py`` value of 75000 time units. Every
 network is integrated until either the split L2 convergence criterion is met
 or that horizon is reached. A terminal event can stop inside a chunk; the
 projected state is always checked again before it is accepted as converged.
@@ -61,7 +45,6 @@ from simulation.pricing import equilibrium_cache
 
 _INTEGRATION_CHUNK = 50.0
 _MAX_LOCAL_RESTARTS = 2
-_ROUTE_TIME_SCALE = 20.0
 
 
 class EquilibriumResult:
@@ -127,7 +110,7 @@ def _state_index_groups(net):
     return x_idx, y_idx
 
 
-def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
+def solve_equilibrium(net, psi, y0=None, t_max=75000.0, tol=1e-6):
     """Integrate the closed inner (traffic + routing) system to steady state.
 
     Returns an EquilibriumResult. `converged=False` means the residual
@@ -144,11 +127,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
     x_idx, y_idx = _state_index_groups(net)
 
     def rhs(t, state):
-        """Accelerated integration field with the same equilibrium points."""
-        derivative = model_rhs(t, state)
-        if y_idx.size:
-            derivative[y_idx] *= _ROUTE_TIME_SCALE
-        return derivative
+        return model_rhs(t, state)
 
     def _residual(t, state):
         """Split L2 residual of the original, unscaled model dynamics."""
@@ -220,7 +199,7 @@ def solve_equilibrium(net, psi, y0=None, t_max=1000.0, tol=1e-6):
             try:
                 sol = solve_ivp(
                     rhs, (elapsed, chunk_end), state, method="BDF",
-                    rtol=1e-7, atol=1e-9, max_step=15.0,
+                    rtol=1e-8, atol=1e-10, max_step=10.0,
                     jac_sparsity=jac_sparsity,
                     events=convergence_event,
                 )

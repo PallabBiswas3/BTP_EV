@@ -47,8 +47,8 @@ export default function PricingDynamics({ history }: Props) {
   return (
     <div>
       <p className="muted" style={{ marginBottom: 12 }}>
-        The outer pricing process performs gradient ascent on each station's profit while the inner
-        transportation system is allowed to reach traffic-routing equilibrium. Toggle stations below to
+        Stations estimate profit gradients from price forecasts, update simultaneously, and advance
+        traffic one physical-time interval. Toggle stations below to
         focus on specific players in the pricing game.
       </p>
       <div className="chip-row" style={{ marginBottom: 14 }}>

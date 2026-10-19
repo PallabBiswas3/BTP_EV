@@ -3,7 +3,7 @@ from simulation.experiments.paper_experiments import (
     PAPER_BETA_SWEEP, PAPER_INITIAL_CONDITIONS, build_paper_network,
 )
 from simulation.pricing.metrics import total_user_cost
-from simulation.pricing.strategic_pricing import outer_loop
+from simulation.pricing.legacy_strategic_pricing import outer_loop
 
 
 def run_experiment1(n_steps: int = 40, report_progress=None) -> dict:

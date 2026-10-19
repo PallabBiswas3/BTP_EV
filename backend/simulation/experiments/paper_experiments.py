@@ -4,7 +4,7 @@ The exact two-OD / three-station network from `simulator_paper.py`
 scenarios so "Paper Reproduction" always uses the network the paper's
 numbers were computed on, regardless of what i.json/i2.json/i3.json contain.
 """
-from simulation.core.network_engine import ChargingNetwork
+from simulation.core.legacy_network_engine import ChargingNetwork
 
 PAPER_DEFAULTS = dict(
     l0=0.25, L=2.0, a=1.0,

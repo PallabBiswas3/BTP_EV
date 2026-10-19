@@ -11,6 +11,15 @@ Charging Stations with Strategic Users on a Traffic Network."*
 See `backend/README.md` and `frontend/README.md` for details on each half.
 Below is the fastest path to running the whole thing locally.
 
+Custom-network runs now use predictive pricing from the supplied `sim.py`:
+stations forecast two candidate prices, update simultaneously, then advance
+traffic by one physical-time interval. Both finite-horizon and equilibrium
+prediction are supported. Defaults are `t_end=75000`, `h=1500`, a 10-interval
+forecast and endpoint profit; the full default run can be expensive.
+See [the migration record](docs/predictive_pricing_migration.md) for the previous
+approach, preserved legacy modules, exact defaults, API examples and reasons
+for each change. Paper experiments retain the previous equilibrium approach.
+
 ## Quick start (development, two servers)
 
 Requires Python 3.11+ and Node 18+.

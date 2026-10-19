@@ -11,8 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from simulation.core.network_engine import latency, station_throughput
-from simulation.pricing.equilibrium import solve_equilibrium
+from simulation.core.network_engine import latency
 from simulation.pricing.metrics import station_metrics, total_user_cost
 from simulation.pricing.strategic_pricing import outer_loop
 from simulation.scenarios.loader import build_network_from_data
@@ -32,30 +31,19 @@ def _arr(a) -> list:
 
 def _network_options_to_kwargs(opts) -> dict:
     return dict(
-        n_steps=opts.n_steps, kappa=opts.kappa, delta=opts.delta,
+        t_end=opts.t_end, h=opts.h, ctrl_horizon=opts.ctrl_horizon,
+        profit_mode=opts.profit_mode, eq_t_max=opts.eq_t_max,
+        parallel=opts.parallel, n_workers=opts.n_workers,
+        kappa=opts.kappa, delta=opts.delta,
         dt_outer=opts.dt_outer, psi_max=opts.psi_max, grad_clip=opts.grad_clip,
         accuracy_mode=opts.accuracy_mode,
-        max_outer_steps=opts.max_outer_steps,
-        outer_tolerance=opts.outer_tolerance,
-        stable_outer_steps=opts.stable_outer_steps,
     )
-
-
-PATH_PROFILES = {
-    # Preserve station competition, but avoid costly alternative-segment
-    # enumeration on large cyclic graphs in the interactive profile.
-    "preview": dict(k_per_segment=1, k_per_station=1, max_paths_per_group=8),
-    "balanced": dict(k_per_segment=6, k_per_station=4, max_paths_per_group=16),
-    "research": dict(k_per_segment=10, k_per_station=8, max_paths_per_group=32),
-}
 
 
 @lru_cache(maxsize=16)
 def _build_network_cached(serialized_config: str, accuracy_mode: str):
-    path_settings = PATH_PROFILES.get(accuracy_mode, PATH_PROFILES["preview"])
-    return build_network_from_data(
-        json.loads(serialized_config), path_settings=path_settings,
-    )
+    # accuracy_mode is a compatibility field; reference routes have fixed rules.
+    return build_network_from_data(json.loads(serialized_config))
 
 
 def build_network(network_config: dict, accuracy_mode="preview"):
@@ -68,7 +56,7 @@ def build_network(network_config: dict, accuracy_mode="preview"):
 def serialize_equilibrium(net, eq_result) -> dict:
     profit, rho, occ = eq_result.profit, eq_result.rho, eq_result.occ
     psi = eq_result.psi
-    uc = total_user_cost(net, psi, eq_result.state)
+    uc = total_user_cost(net, psi, eq_result.state, eq_result.quality["actual_t_end"])
     return {
         "prices": {s: _f(v) for s, v in psi.items()},
         "occupancies": {s: _f(v) for s, v in occ.items()},
@@ -76,6 +64,8 @@ def serialize_equilibrium(net, eq_result) -> dict:
         "profits": {s: _f(v) for s, v in profit.items()},
         "total_profit": _f(sum(profit.values())) if profit else 0.0,
         "total_user_cost": _f(uc),
+        "total_revenue": _f(sum(psi[s] * rho[s] for s in psi)),
+        "result_kind": "dynamic_endpoint",
         "converged": bool(eq_result.converged),
         "warnings": list(eq_result.warnings),
         "quality": {
@@ -87,18 +77,24 @@ def serialize_equilibrium(net, eq_result) -> dict:
 
 def serialize_outer_history(net, hist: dict) -> dict:
     stations = list(net.stations.keys())
-    n = len(hist[stations[0]]["psi"]) if stations else 0
+    n = len(hist["time"]) if "time" in hist else (len(hist[stations[0]]["psi"]) if stations else 0)
     return {
         "step": list(range(n)),
+        "time": _arr(hist["time"]) if "time" in hist else list(range(n)),
         "stations": {
             s: {
                 "price": _arr(hist[s]["psi"]),
                 "occupancy": _arr(hist[s]["occ"]),
                 "throughput": _arr(hist[s]["rho"]),
                 "profit": _arr(hist[s]["profit"]),
+                **({"revenue": _arr(hist[s]["revenue"]), "queue": _arr(hist[s]["queue"])}
+                   if "revenue" in hist[s] else {}),
             }
             for s in stations
         },
+        "wardrop": {f"{od}/{cls}": _arr(values) for (od, cls), values in hist.get("wardrop", {}).items()},
+        "path_y": {pid: _arr(values) for pid, values in hist.get("path_y", {}).items()},
+        "total_revenue": _arr(hist["total_revenue"]) if "total_revenue" in hist else [],
     }
 
 
@@ -117,8 +113,11 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
         nev = res_pp.get(f"x_{lbl}_NEV")
         total = res_pp.get(f"x_{lbl}")
         total_arr = np.asarray(total) if total is not None else np.zeros_like(T)
-        lat = np.array([latency(x, attrs["l0"], attrs["L"], attrs["a"]) for x in total_arr])
-        cap_ratio = np.clip(attrs["a"] * total_arr / attrs["L"], 0.0, 1.0)
+        lat = np.array([
+            latency(x, attrs["l0"], attrs["L"], attrs["a"])
+            for x in total_arr
+        ])
+        cap_ratio = np.clip(total_arr / attrs["L"], 0.0, 1.0)
         roads[lbl] = {
             "u": e[0], "v": e[1],
             "classes": sorted(attrs["classes"]),
@@ -145,6 +144,7 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
             "throughput": _arr(res_pp[f"rho_{name}"]),
             "price": _arr(res_pp[f"psi_{name}"]),
             "profit": _arr(res_pp[f"profit_{name}"]),
+            "revenue": _arr(res_pp[f"revenue_{name}"]),
         }
 
     paths: dict[str, Any] = {}
@@ -168,6 +168,7 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
         "paths": paths,
         "total_profit": _arr(res_pp["total_profit"]),
         "total_user_cost": _arr(res_pp["total_user_cost"]),
+        "total_revenue": _arr(res_pp["total_revenue"]),
     }
 
 
@@ -184,7 +185,7 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
         if report_progress:
             report_progress(phase, step, n_steps)
 
-    _report("Preparing network", 0, options.n_steps)
+    _report("Preparing network", 0, int(round(options.t_end / options.h)))
     net = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
     outer = outer_loop(
@@ -194,23 +195,21 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
     )
 
     _report(
-        "Generating equilibrium-process trajectory",
+        "Generating physical-time trajectory",
         outer.quality["completed_steps"], outer.quality["maximum_steps"],
     )
-    # Each frame is the inner quasi-equilibrium estimated at one outer pricing
-    # iteration. This exposes how prices shift routes, congestion, and station
-    # utilization on the way to the final strategic equilibrium.
-    frame_steps = np.arange(len(outer.state_history), dtype=float)
+    frame_times = np.asarray(outer.time_history)
     frame_states = np.column_stack(outer.state_history)
 
     def price_at_frame(station: str):
         def value(t):
-            index = min(max(int(round(t)), 0), len(outer.price_history) - 1)
+            index = int(np.searchsorted(frame_times, t, side="right") - 1)
+            index = min(max(index, 0), len(outer.price_history) - 1)
             return outer.price_history[index][station]
         return value
 
     frame_prices = {station: price_at_frame(station) for station in net.stations}
-    process_res = {"t": frame_steps, "y": frame_states, "psi_override": frame_prices}
+    process_res = {"t": frame_times, "y": frame_states, "psi_override": frame_prices}
     post = net.post_process(process_res, psi_override=frame_prices)
 
     return {
@@ -225,7 +224,7 @@ def run_equilibrium(network_config: dict, options, report_progress=None) -> dict
         if report_progress:
             report_progress(phase, step, n_steps)
 
-    _report("Preparing network", 0, options.n_steps)
+    _report("Preparing network", 0, int(round(options.t_end / options.h)))
     net = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
     outer = outer_loop(
@@ -272,7 +271,7 @@ def run_beta_sweep(network_config: dict, options, beta_min: float, beta_max: flo
             records["occupancies"][s].append(_f(outer.occ[s]))
             records["profits"][s].append(_f(outer.profit[s]))
         total_profit.append(_f(sum(outer.profit.values())))
-        total_user_cost_series.append(_f(total_user_cost(net, outer.psi, outer.state)))
+        total_user_cost_series.append(_f(total_user_cost(net, outer.psi, outer.state, outer.quality["actual_t_end"])))
 
     return {
         "beta": betas,
@@ -287,23 +286,35 @@ def run_beta_sweep(network_config: dict, options, beta_min: float, beta_max: flo
     }
 
 
-def run_compare_pricing(network_config: dict, options) -> dict:
+def run_compare_pricing(network_config: dict, options, report_progress=None) -> dict:
     net_strategic = build_network(network_config, options.accuracy_mode)
     kwargs = _network_options_to_kwargs(options)
-    outer = outer_loop(net_strategic, psi0=options.psi0, **kwargs)
+    outer = outer_loop(
+        net_strategic, psi0=options.psi0,
+        progress_cb=(lambda step, total: report_progress("Simulating strategic prices", step, total))
+        if report_progress else None, **kwargs,
+    )
     stations = list(net_strategic.stations.keys())
 
     avg_price = sum(outer.psi.values()) / len(outer.psi) if outer.psi else 0.0
     fixed_psi = {s: avg_price for s in stations}
 
     net_fixed = build_network(network_config, options.accuracy_mode)
-    fixed_horizon = {"preview": 200.0, "balanced": 500.0, "research": 1000.0}[
-        options.accuracy_mode
-    ]
-    eq_fixed = solve_equilibrium(net_fixed, fixed_psi, t_max=fixed_horizon)
-    profit_fixed, rho_fixed, occ_fixed = station_metrics(net_fixed, fixed_psi, eq_fixed.state)
-    uc_fixed = total_user_cost(net_fixed, fixed_psi, eq_fixed.state)
-    uc_strategic = total_user_cost(net_strategic, outer.psi, outer.state)
+    if report_progress:
+        report_progress("Simulating fixed prices over the same physical duration", 0, 1)
+    # Compare both policies after the same physical duration from the same
+    # empty-network/equal-route initial state, rather than comparing a transient
+    # strategic endpoint with a settled fixed-price equilibrium.
+    fixed_state = net_fixed.advance(
+        net_fixed.initial_state(), 0.0, fixed_psi, options.h,
+        outer.quality["completed_steps"],
+    )
+    profit_fixed, rho_fixed, occ_fixed = station_metrics(net_fixed, fixed_psi, fixed_state)
+    end_time = outer.quality["actual_t_end"]
+    uc_fixed = total_user_cost(net_fixed, fixed_psi, fixed_state, end_time)
+    uc_strategic = total_user_cost(net_strategic, outer.psi, outer.state, end_time)
+    if report_progress:
+        report_progress("Comparison complete", 1, 1)
 
     return {
         "stations": stations,
@@ -324,7 +335,7 @@ def run_compare_pricing(network_config: dict, options) -> dict:
             "total_profit": _f(sum(profit_fixed.values())),
             "total_user_cost": _f(uc_fixed),
         },
-        "warnings": outer.warnings + ([eq_fixed.message] if not eq_fixed.converged else []),
+        "warnings": outer.warnings,
     }
 
 

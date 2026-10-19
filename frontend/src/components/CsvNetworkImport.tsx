@@ -57,6 +57,7 @@ export default function CsvNetworkImport({ defaults, running, onImport }: Props)
       {open && (
         <div className="csv-import-body">
           <p className="muted">Required columns: roads <b>u,v</b>; stations <b>u,v,name</b>; ODs <b>name,origin,dest,lam,EV,NEV</b>.</p>
+          <p className="muted">Also accepts station_id, od_name, total_demand, ev_share and nev_share. Optional demand_schedule uses time:value;time:value.</p>
           {(['roads', 'stations', 'ods'] as FileKey[]).map((key) => (
             <label className="csv-file" key={key}>
               <span>{key === 'stations' ? 'station.csv' : `${key}.csv`}</span>

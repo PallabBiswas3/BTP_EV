@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from simulation.core.network_engine import ChargingNetwork
+from simulation.scenarios.demand import ConstantDemand, StepDemand
 
 NETWORKS_DIR = Path(__file__).resolve().parents[2] / "networks"
 
@@ -59,7 +60,7 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
     fingerprint_payload = {
         "network": data,
         "path_settings": path_settings or {},
-        "builder_version": "bounded-routes-v3",
+        "builder_version": "predictive-reference-routes-v1",
     }
     net.cache_fingerprint = hashlib.sha256(
         json.dumps(
@@ -87,6 +88,7 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
             a_s=st.get("a_s", None),
             c_s=st.get("c_s", None),
             phi0=st.get("phi0", None),
+            psi=st.get("initial_psi", 0.5),
         )
 
     for od in data.get("ods", []):
@@ -94,11 +96,15 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
             name=od["name"],
             origin=od["origin"],
             dest=od["dest"],
-            lam_fn=lambda t, val=od["lam"]: val,
+            lam_fn=(StepDemand.from_spec(od["lam"], od["demand_schedule"])
+                    if od.get("demand_schedule") else ConstantDemand(od["lam"])),
             class_shares=od["shares"],
         )
 
     net.build(verbose=False)
+    reserved = set(net.stations) & {"time", "wardrop", "path_y", "total_revenue"}
+    if reserved:
+        raise ValueError(f"Station names conflict with reference history keys: {sorted(reserved)}")
     return net
 
 

@@ -33,6 +33,7 @@ export interface StationConfig {
   a_s?: number
   c_s?: number
   phi0?: number
+  initial_psi?: number
 }
 
 export interface ODConfig {
@@ -41,6 +42,7 @@ export interface ODConfig {
   dest: string
   lam: number
   shares: Record<string, number>
+  demand_schedule?: string
 }
 
 export interface NetworkConfig {
@@ -68,9 +70,15 @@ export interface SimulationOptions {
   kappa: number
   delta: number
   dt_outer: number
-  psi_max: number
-  grad_clip: number
+  psi_max: number | null
+  grad_clip: number | null
   t_end: number
+  h: number
+  ctrl_horizon: number | 'eq'
+  profit_mode: 'mean' | 'end'
+  eq_t_max: number
+  parallel: boolean | null
+  n_workers: number | null
   psi0?: Record<string, number> | null
 }
 
@@ -83,9 +91,15 @@ export const DEFAULT_SIMULATION_OPTIONS: SimulationOptions = {
   kappa: 0.1,
   delta: 0.02,
   dt_outer: 1.0,
-  psi_max: 3.0,
-  grad_clip: 5.0,
-  t_end: 50,
+  psi_max: null,
+  grad_clip: null,
+  t_end: 75000,
+  h: 1500,
+  ctrl_horizon: 10,
+  profit_mode: 'end',
+  eq_t_max: 75000,
+  parallel: null,
+  n_workers: null,
 }
 
 // ---- Result shapes (mirror app/services/simulation_service.py serializers) ----
@@ -97,9 +111,22 @@ export interface EquilibriumBlock {
   profits: Record<string, number>
   total_profit: number
   total_user_cost: number
+  total_revenue: number
+  result_kind: 'dynamic_endpoint'
   converged: boolean
   warnings: string[]
   quality: {
+    approach: 'predictive'
+    result_kind: 'dynamic_endpoint'
+    ctrl_horizon: number | 'eq'
+    profit_mode: 'mean' | 'end'
+    h: number
+    requested_t_end: number
+    actual_t_end: number
+    forecast_duration: number | null
+    forecast_solve_count: number
+    actual_advance_count: number
+    wall_time_seconds: number
     accuracy_mode: 'preview' | 'balanced' | 'research'
     gradient_method: string
     gradient_samples: number
@@ -136,10 +163,16 @@ export interface OuterHistoryStation {
   occupancy: number[]
   throughput: number[]
   profit: number[]
+  revenue?: number[]
+  queue?: number[]
 }
 
 export interface OuterHistoryBlock {
   step: number[]
+  time: number[]
+  wardrop: Record<string, number[]>
+  path_y: Record<string, number[]>
+  total_revenue: number[]
   stations: Record<string, OuterHistoryStation>
 }
 
@@ -163,6 +196,7 @@ export interface StationTrajectory {
   throughput: number[]
   price: number[]
   profit: number[]
+  revenue: number[]
 }
 
 export interface PathTrajectory {
@@ -181,6 +215,7 @@ export interface TrajectoryBlock {
   paths: Record<string, PathTrajectory>
   total_profit: number[]
   total_user_cost: number[]
+  total_revenue: number[]
 }
 
 export interface SimulateResult {

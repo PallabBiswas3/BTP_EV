@@ -185,12 +185,18 @@ export default function App() {
   }, [playing, playbackSpeed, result])
 
   const totalEV = useMemo(
-    () => (network ? network.ods.reduce((sum, od) => sum + od.lam * (od.shares.EV ?? 0), 0) : 0),
-    [network],
+    () => result
+      ? Object.values(result.trajectory.paths).filter((path) => path.vehicle_class === 'EV')
+        .reduce((sum, path) => sum + (path.flow[timeIndex] ?? 0), 0)
+      : (network ? network.ods.reduce((sum, od) => sum + od.lam * (od.shares.EV ?? 0), 0) : 0),
+    [network, result, timeIndex],
   )
   const totalNEV = useMemo(
-    () => (network ? network.ods.reduce((sum, od) => sum + od.lam * (od.shares.NEV ?? 0), 0) : 0),
-    [network],
+    () => result
+      ? Object.values(result.trajectory.paths).filter((path) => path.vehicle_class === 'NEV')
+        .reduce((sum, path) => sum + (path.flow[timeIndex] ?? 0), 0)
+      : (network ? network.ods.reduce((sum, od) => sum + od.lam * (od.shares.NEV ?? 0), 0) : 0),
+    [network, result, timeIndex],
   )
   const maxCongestion = useMemo(() => {
     if (!result) return null
@@ -241,7 +247,7 @@ export default function App() {
         </div>
         <div className="topbar-actions">
           <span className={`status ${activeJob === 'simulate' ? 'busy' : result ? 'ready' : ''}`}>
-            {activeJob === 'simulate' ? 'Solving…' : result ? 'Equilibrium ready' : 'Awaiting run'}
+            {activeJob === 'simulate' ? 'Solving…' : result ? 'Simulation ready' : 'Awaiting run'}
           </span>
         </div>
       </header>
@@ -265,9 +271,9 @@ export default function App() {
           <div className="metric-grid">
             <div className="metric-card"><span>Total EV demand</span><strong>{totalEV.toFixed(2)}</strong><small>veh/time</small></div>
             <div className="metric-card"><span>Total NEV demand</span><strong>{totalNEV.toFixed(2)}</strong><small>veh/time</small></div>
-            <div className="metric-card"><span>Station throughput</span><strong>{result ? result.equilibrium.total_profit && Object.values(result.equilibrium.throughputs).reduce((a, b) => a + b, 0).toFixed(2) : '—'}</strong><small>veh/time</small></div>
+            <div className="metric-card"><span>Station throughput</span><strong>{result ? Object.values(result.equilibrium.throughputs).reduce((a, b) => a + b, 0).toFixed(2) : '—'}</strong><small>veh/time</small></div>
             <div className="metric-card"><span>Total station profit</span><strong>{result ? result.equilibrium.total_profit.toFixed(3) : '—'}</strong><small>$/time</small></div>
-            <div className="metric-card"><span>Total user cost</span><strong>{result ? result.equilibrium.total_user_cost.toFixed(3) : '—'}</strong><small>at equilibrium</small></div>
+            <div className="metric-card"><span>Total user cost</span><strong>{result ? result.equilibrium.total_user_cost.toFixed(3) : '—'}</strong><small>at final time</small></div>
             <div className="metric-card"><span>Max congestion x/L</span><strong>{maxCongestion !== null ? maxCongestion.toFixed(2) : '—'}</strong><small>{busiestStation ? `busiest: ${busiestStation.name}` : ''}</small></div>
           </div>
 
@@ -277,32 +283,22 @@ export default function App() {
               <b>{validationMsg.ok ? 'Validation passed:' : 'Validation failed:'}</b> {validationMsg.text}
             </div>
           )}
-          {result && !result.equilibrium.converged && (
-            <div className="warning-banner">
-              One or more equilibrium solves did not meet the residual tolerance. Treat this run as an
-              estimate and use the Research profile or more pricing steps before reporting its values.
-            </div>
+          {result && result.equilibrium.warnings.length > 0 && (
+            <div className="warning-banner">{result.equilibrium.warnings.join(' ')}</div>
           )}
           {result && (
-            <div className={result.equilibrium.quality.certified ? 'quality-banner certified' : 'quality-banner estimated'}>
-              <div><span>Quality</span><strong>{result.equilibrium.quality.certified ? 'Numerically certified' : 'Estimate only'}</strong></div>
-              <div><span>Profile</span><strong>{result.equilibrium.quality.accuracy_mode}</strong></div>
+            <div className="quality-banner estimated">
+              <div><span>Result</span><strong>Dynamic endpoint</strong></div>
+              <div><span>Prediction</span><strong>{result.equilibrium.quality.ctrl_horizon === 'eq' ? 'Equilibrium' : `${result.equilibrium.quality.ctrl_horizon} intervals`}</strong></div>
               <div><span>Routes / states</span><strong>{result.equilibrium.quality.path_count} / {result.equilibrium.quality.state_count}</strong></div>
-              <div><span>Final residual</span><strong>{result.equilibrium.quality.final_residual.toExponential(2)}</strong></div>
-              <div><span>Conservation error</span><strong>{result.equilibrium.quality.conservation_error.toExponential(2)}</strong></div>
-              <div><span>Gradient</span><strong>{result.equilibrium.quality.gradient_method} · {result.equilibrium.quality.gradient_execution === 'process-parallel' ? `${result.equilibrium.quality.gradient_workers} workers` : result.equilibrium.quality.gradient_execution}</strong></div>
-              <div><span>Pricing iterations</span><strong>{result.equilibrium.quality.completed_steps} · {result.equilibrium.quality.stop_reason}</strong></div>
-              {(result.equilibrium.quality.cache_hit_count > 0 || result.equilibrium.quality.cache_warm_start_count > 0) && (
-                <div className="quality-detail">Cache reused {result.equilibrium.quality.cache_hit_count} exact equilibria and {result.equilibrium.quality.cache_warm_start_count} nearby warm starts.</div>
-              )}
-              {result.equilibrium.quality.gradient_execution !== 'process-parallel' && result.equilibrium.quality.gradient_fallback_reason && (
-                <div className="quality-detail">Parallel gradients unavailable: {result.equilibrium.quality.gradient_fallback_reason}.</div>
-              )}
-              {!result.equilibrium.quality.outer_converged && (
-                <div className="quality-detail">The final price change did not fall below {result.equilibrium.quality.outer_tolerance.toExponential(1)}. Final change: {result.equilibrium.quality.last_price_change.toExponential(2)}.</div>
-              )}
-              {result.equilibrium.quality.route_limit_hits.length > 0 && (
-                <div className="quality-detail">Route cap reached for {result.equilibrium.quality.route_limit_hits.join(', ')}.</div>
+              <div><span>Final derivative norm</span><strong>{result.equilibrium.quality.final_residual.toExponential(2)}</strong></div>
+              <div><span>Runtime</span><strong>{result.equilibrium.quality.wall_time_seconds.toFixed(2)} s</strong></div>
+              <div><span>Forecasts</span><strong>{result.equilibrium.quality.forecast_solve_count} · {result.equilibrium.quality.gradient_execution}</strong></div>
+              <div><span>Pricing updates</span><strong>{result.equilibrium.quality.completed_steps}</strong></div>
+              <div><span>Physical duration</span><strong>{result.equilibrium.quality.actual_t_end}</strong></div>
+              <div className="quality-detail">Traffic advances between price updates. The final state is a simulation endpoint; a small derivative or price change does not certify a Nash equilibrium.</div>
+              {result.equilibrium.quality.gradient_fallback_reason && (
+                <div className="quality-detail">{result.equilibrium.quality.gradient_fallback_reason}</div>
               )}
             </div>
           )}
@@ -345,7 +341,7 @@ export default function App() {
                   onSelectStation={setSelectedStation}
                 />
                 <div className="timeline-row">
-                  <span>Equilibrium step</span>
+                  <span>Physical time t</span>
                   <input type="range" min="0" max={Math.max(0, (result?.trajectory.time.length ?? 1) - 1)}
                          value={Math.min(timeIndex, (result?.trajectory.time.length ?? 1) - 1)}
                          onChange={(e) => setTimeIndex(Number(e.target.value))} disabled={!result} />
@@ -366,7 +362,7 @@ export default function App() {
               <div className="panel station-panel">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Equilibrium state</p>
+                    <p className="eyebrow">Final simulated state</p>
                     <h2>Charging stations</h2>
                   </div>
                 </div>

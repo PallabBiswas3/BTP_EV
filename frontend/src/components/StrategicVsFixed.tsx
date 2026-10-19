@@ -22,9 +22,9 @@ export default function StrategicVsFixed({ result, running, onRun }: Props) {
   return (
     <div>
       <p className="muted" style={{ marginBottom: 12 }}>
-        Compares the strategic Nash-equilibrium price profile against a uniform fixed price set to the same
-        average — isolating the effect of price <i>differentiation</i> across stations from the effect of price
-        <i> level</i>. Uses the current network and solver settings from the left panel.
+        Compares predictive pricing against a uniform fixed price set to the average final strategic price.
+        Both policies start from the same initial traffic state and run for the same physical duration.
+        The results compare their final simulated states, using the settings from the left panel.
       </p>
       <button className="primary-button" onClick={onRun} disabled={running} style={{ marginBottom: 16 }}>
         {running ? 'Comparing…' : 'Run comparison'}

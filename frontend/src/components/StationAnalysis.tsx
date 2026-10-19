@@ -16,7 +16,7 @@ export default function StationAnalysis({
   const active = selectedStation && stations.includes(selectedStation) ? selectedStation : stations[0]
 
   if (!trajectory || !active) {
-    return <div className="empty-state">Run a simulation, then pick a station to inspect its equilibrium process.</div>
+    return <div className="empty-state">Run a simulation, then pick a station to inspect its traffic and pricing trajectory.</div>
   }
 
   const station = trajectory.stations[active]
@@ -40,7 +40,7 @@ export default function StationAnalysis({
             <span className="mono muted">K_s = {station.saturation_K.toFixed(2)}</span>
           </div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="occupancy"
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="occupancy"
               thresholdY={station.saturation_K} thresholdLabel="saturation K_s" {...marker}
               series={[{ id: 'occupancy', label: 'occupancy x_s', color: '#2a5f5b', values: station.occupancy }]} />
           </div>
@@ -49,7 +49,7 @@ export default function StationAnalysis({
         <div className="chart-card">
           <div className="chart-title-row"><h3>Price</h3><span className="mono muted">price per EV</span></div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="price" {...marker}
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="price" {...marker}
               series={[{ id: 'price', label: active, color: '#2a5f5b', values: station.price }]} />
           </div>
         </div>
@@ -57,7 +57,7 @@ export default function StationAnalysis({
         <div className="chart-card">
           <div className="chart-title-row"><h3>Queue</h3><span className="mono muted">waiting vehicles</span></div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="vehicles" {...marker}
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="vehicles" {...marker}
               series={[{ id: 'queue', label: 'queue q_s', color: '#c15b3f', values: station.queue }]} />
           </div>
         </div>
@@ -65,7 +65,7 @@ export default function StationAnalysis({
         <div className="chart-card">
           <div className="chart-title-row"><h3>Waiting time</h3><span className="mono muted">delay per EV</span></div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="time" {...marker}
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="time" {...marker}
               series={[{ id: 'wait', label: 'waiting time w_s', color: '#9c8256', values: station.waiting_time }]} />
           </div>
         </div>
@@ -73,7 +73,7 @@ export default function StationAnalysis({
         <div className="chart-card">
           <div className="chart-title-row"><h3>Throughput</h3><span className="mono muted">served EVs</span></div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="vehicles / time" {...marker}
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="vehicles / time" {...marker}
               series={[{ id: 'throughput', label: 'throughput rho_s', color: '#4b6f8c', values: station.throughput }]} />
           </div>
         </div>
@@ -81,8 +81,15 @@ export default function StationAnalysis({
         <div className="chart-card">
           <div className="chart-title-row"><h3>Profit</h3><span className="mono muted">station return</span></div>
           <div className="chart-area">
-            <LineSeriesChart x={trajectory.time} xLabel="equilibrium step" yLabel="profit / time" {...marker}
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="profit / time" {...marker}
               series={[{ id: 'profit', label: 'profit pi_s', color: '#6b5b8c', values: station.profit }]} />
+          </div>
+        </div>
+        <div className="chart-card">
+          <div className="chart-title-row"><h3>Revenue</h3><span className="mono muted">price × throughput</span></div>
+          <div className="chart-area">
+            <LineSeriesChart x={trajectory.time} xLabel="physical time t" yLabel="revenue / time" {...marker}
+              series={[{ id: 'revenue', label: 'revenue', color: '#9c8256', values: station.revenue }]} />
           </div>
         </div>
       </div>

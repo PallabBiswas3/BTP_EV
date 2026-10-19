@@ -56,7 +56,7 @@ function numberValue(record: CsvRecord, key: string, filename: string, row: numb
 }
 
 function classList(value: string | undefined) {
-  const classes = value?.split(/[|;]/).map((item) => item.trim()).filter(Boolean)
+  const classes = value?.split(/[|;,]/).map((item) => item.trim()).filter(Boolean)
   return classes?.length ? classes : undefined
 }
 
@@ -72,8 +72,14 @@ export function networkFromCsv(
   defaults: NetworkConfig['defaults'],
 ): NetworkConfig {
   const roadRecords = parseCsv(roadText, 'roads.csv')
-  const stationRecords = parseCsv(stationText, 'station.csv')
-  const odRecords = parseCsv(odText, 'ods.csv')
+  const stationRecords = parseCsv(stationText, 'station.csv').map<CsvRecord>((record) => ({
+    ...record, name: record.name || record.station_id,
+  }))
+  const odRecords = parseCsv(odText, 'ods.csv').map<CsvRecord>((record) => ({
+    ...record, name: record.name || record.od_name,
+    lam: record.lam || record.total_demand,
+    ev: record.ev || record.ev_share, nev: record.nev || record.nev_share,
+  }))
   if (roadRecords.length === 0) throw new Error('roads.csv: at least one road is required.')
   if (odRecords.length === 0) throw new Error('ods.csv: at least one OD pair is required.')
 
@@ -103,6 +109,7 @@ export function networkFromCsv(
       a_s: numberValue(record, 'a_s', 'station.csv', row),
       c_s: numberValue(record, 'c_s', 'station.csv', row),
       phi0: numberValue(record, 'phi0', 'station.csv', row),
+      initial_psi: numberValue(record, 'initial_psi', 'station.csv', row),
     }
     if (station.mu_s !== undefined && station.mu_s <= 0) throw new Error(`station.csv: row ${row}, 'mu_s' must be positive.`)
     if (station.a_s !== undefined && station.a_s <= 0) throw new Error(`station.csv: row ${row}, 'a_s' must be positive.`)
@@ -140,6 +147,7 @@ export function networkFromCsv(
       dest: required(record, 'dest', 'ods.csv', row),
       lam,
       shares,
+      demand_schedule: record.demand_schedule || '',
     }
   })
   ensureUnique(ods.map((od) => od.name), 'OD name')

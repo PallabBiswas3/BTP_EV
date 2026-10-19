@@ -1,0 +1,6 @@
+-r requirements.txt
+httpx>=0.27
+
+# Only needed for optional parity tests importing the supplied offline scripts.
+pandas>=2.0
+matplotlib>=3.8
