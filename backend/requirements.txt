@@ -4,3 +4,5 @@ numpy>=1.26
 scipy>=1.13
 networkx>=3.3
 pydantic>=2.7
+pandas>=2.0
+matplotlib>=3.8

@@ -11,7 +11,7 @@ import StationAnalysis from './components/StationAnalysis'
 import StationCards from './components/StationCards'
 import StrategicVsFixed from './components/StrategicVsFixed'
 import {
-  fetchScenarioNetwork, fetchScenarios, runBetaSweep, runComparePricing,
+  artifactUrl, fetchScenarioNetwork, fetchScenarios, runBetaSweep, runComparePricing,
   runPaperExperiment1, runPaperExperiment2, runPaperExperiment3, runSimulate, validateNetwork,
 } from './api'
 import type {
@@ -392,6 +392,16 @@ export default function App() {
               <div className="section-heading">
                 <div><p className="eyebrow">Backend payload</p><h2>Simulation response</h2></div>
               </div>
+              {result?.final_traffic && <p>
+                Final fixed-price continuation: {result.final_traffic.actual_duration} time units;
+                total profit {result.final_traffic.total_profit.toFixed(3)}, user cost {result.final_traffic.total_user_cost.toFixed(3)}.
+                The network animation shows the pricing run. Continuation states are included below as final_traffic.
+              </p>}
+              {result && result.artifacts.length > 0 && <ul>
+                {result.artifacts.map((artifact) => <li key={artifact.url}>
+                  <a href={artifactUrl(artifact.url)} target="_blank" rel="noreferrer">{artifact.name}</a>
+                </li>)}
+              </ul>}
               <pre>{JSON.stringify(result ?? { message: 'Run a simulation to inspect the backend response.' }, null, 2)}</pre>
             </div>
           )}

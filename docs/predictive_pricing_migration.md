@@ -1,5 +1,9 @@
 # Predictive pricing migration and previous approach
 
+> Historical record: superseded on 2026-10-24 by the
+> [exact supplied-script implementation](exact_source_implementation.md).
+> Adaptations described here no longer define custom-network execution.
+
 Date: 2026-10-08.
 
 ## Scope and source

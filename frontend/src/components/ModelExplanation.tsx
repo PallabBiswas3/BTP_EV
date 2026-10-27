@@ -46,7 +46,7 @@ export default function ModelExplanation() {
       <div className="formula-line">Gradient ≈ (forecast profit+ − forecast profit−)/(price+ − price−)</div>
       <div className="formula-line">New price = max(0, price + dt_outer · κ · gradient)</div>
       <p>
-        Price caps and gradient clipping are optional. Each station optimizes its own profit;
+        Prices have a zero lower bound; gradient clipping is optional. Each station optimizes its own profit;
         stable prices do not establish a Nash equilibrium or minimum citywide waiting time.
       </p>
       <h3>Reading the dashboard</h3>
@@ -55,6 +55,13 @@ export default function ModelExplanation() {
         update index k. The last frame is the final simulated state, rather than an equilibrium
         snapshot. The run performs round(t_end/h) updates; all forecast scenarios start from
         the same current traffic state.
+      </p>
+      <p>
+        Routing follows the supplied scripts exactly: class labels do not filter roads, and
+        OD pairs without a road-only connection are skipped. Initial pricing uses one uniform
+        value, regardless of station initial_psi entries. After pricing, a separate fixed-price
+        continuation produces the original final traffic summary. Its results and the original
+        PNG plots are available in Raw Data.
       </p>
     </div>
   )

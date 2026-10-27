@@ -70,7 +70,8 @@ class SimulationOptions(BaseModel):
     kappa: float = Field(0.1, gt=0)
     delta: float = Field(0.02, gt=0)
     dt_outer: float = Field(1.0, gt=0)
-    psi_max: Optional[float] = Field(None, gt=0)
+    # Accepted only as null to reject old clients requesting a non-source cap.
+    psi_max: None = None
     grad_clip: Optional[float] = Field(None, gt=0)
     t_end: float = Field(75000.0, gt=0)
     h: float = Field(1500.0, gt=0)
@@ -79,7 +80,9 @@ class SimulationOptions(BaseModel):
     eq_t_max: float = Field(75000.0, gt=0)
     parallel: Optional[bool] = None
     n_workers: Optional[int] = Field(None, ge=1)
-    psi0: Optional[dict[str, float]] = None
+    psi0: float = Field(0.5, ge=0)
+    final_t: float = Field(500.0, gt=0)
+    save_plots: bool = True
 
     @field_validator("ctrl_horizon", mode="before")
     @classmethod
@@ -94,8 +97,6 @@ class SimulationOptions(BaseModel):
     def valid_step_count(self):
         if round(self.t_end / self.h) < 1:
             raise ValueError("t_end/h must round to at least one pricing step")
-        if self.psi0 and any(value < 0 or (self.psi_max is not None and value > self.psi_max) for value in self.psi0.values()):
-            raise ValueError("Initial prices must be nonnegative and within the optional cap")
         return self
 
 

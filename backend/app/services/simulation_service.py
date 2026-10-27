@@ -35,8 +35,7 @@ def _network_options_to_kwargs(opts) -> dict:
         profit_mode=opts.profit_mode, eq_t_max=opts.eq_t_max,
         parallel=opts.parallel, n_workers=opts.n_workers,
         kappa=opts.kappa, delta=opts.delta,
-        dt_outer=opts.dt_outer, psi_max=opts.psi_max, grad_clip=opts.grad_clip,
-        accuracy_mode=opts.accuracy_mode,
+        dt_outer=opts.dt_outer, grad_clip=opts.grad_clip,
     )
 
 
@@ -104,7 +103,9 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
 
     roads: dict[str, Any] = {}
     road_edges_by_label = {
-        net.G.edges[edge]["label"]: edge for edge in net.all_road_edges
+        attrs["label"]: (u, v, key)
+        for u, v, key, attrs in net.G.edges(keys=True, data=True)
+        if attrs["kind"] == "road"
     }
     for lbl, e in sorted(road_edges_by_label.items()):
         # Find one representative edge with this label to read static attrs.
@@ -114,7 +115,7 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
         total = res_pp.get(f"x_{lbl}")
         total_arr = np.asarray(total) if total is not None else np.zeros_like(T)
         lat = np.array([
-            latency(x, attrs["l0"], attrs["L"], attrs["a"])
+            latency(x, attrs["l0"], attrs["L"])
             for x in total_arr
         ])
         cap_ratio = np.clip(total_arr / attrs["L"], 0.0, 1.0)
@@ -168,7 +169,9 @@ def serialize_trajectory(net, res_pp: dict) -> dict:
         "paths": paths,
         "total_profit": _arr(res_pp["total_profit"]),
         "total_user_cost": _arr(res_pp["total_user_cost"]),
-        "total_revenue": _arr(res_pp["total_revenue"]),
+        "total_revenue": _arr(sum(
+            (res_pp[f"revenue_{s}"] for s in net.stations), np.zeros_like(T),
+        )),
     }
 
 
@@ -212,10 +215,14 @@ def run_simulate(network_config: dict, options, report_progress=None) -> dict:
     process_res = {"t": frame_times, "y": frame_states, "psi_override": frame_prices}
     post = net.post_process(process_res, psi_override=frame_prices)
 
+    from app.services.reference_outputs import finish_reference_run
+    continuation, artifacts = finish_reference_run(net, outer, options, report_progress)
     return {
         "equilibrium": serialize_equilibrium(net, outer),
         "outer_history": serialize_outer_history(net, outer.hist),
         "trajectory": serialize_trajectory(net, post),
+        "final_traffic": continuation,
+        "artifacts": artifacts,
     }
 
 
@@ -262,7 +269,7 @@ def run_beta_sweep(network_config: dict, options, beta_min: float, beta_max: flo
             stations_ref[:] = stations
             for k in records:
                 records[k] = {s: [] for s in stations}
-        outer = outer_loop(net, psi0={s: 0.4 for s in stations}, **kwargs)
+        outer = outer_loop(net, psi0=options.psi0, **kwargs)
         if outer.warnings:
             warnings.extend([f"beta={beta}: {w}" for w in outer.warnings])
         for s in stations:

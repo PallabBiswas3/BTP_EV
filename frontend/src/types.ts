@@ -62,15 +62,9 @@ export interface ScenarioMeta {
 // ---- Simulation options (mirrors app/schemas/network.py SimulationOptions) ----
 
 export interface SimulationOptions {
-  accuracy_mode: 'preview' | 'balanced' | 'research'
-  n_steps: number
-  max_outer_steps: number
-  outer_tolerance: number
-  stable_outer_steps: number
   kappa: number
   delta: number
   dt_outer: number
-  psi_max: number | null
   grad_clip: number | null
   t_end: number
   h: number
@@ -79,27 +73,26 @@ export interface SimulationOptions {
   eq_t_max: number
   parallel: boolean | null
   n_workers: number | null
-  psi0?: Record<string, number> | null
+  psi0: number
+  final_t: number
+  save_plots: boolean
 }
 
 export const DEFAULT_SIMULATION_OPTIONS: SimulationOptions = {
-  accuracy_mode: 'preview',
-  n_steps: 30,
-  max_outer_steps: 120,
-  outer_tolerance: 0.0001,
-  stable_outer_steps: 3,
   kappa: 0.1,
   delta: 0.02,
   dt_outer: 1.0,
-  psi_max: null,
   grad_clip: null,
   t_end: 75000,
   h: 1500,
-  ctrl_horizon: 10,
+  ctrl_horizon: 1,
   profit_mode: 'end',
   eq_t_max: 75000,
-  parallel: null,
+  parallel: true,
   n_workers: null,
+  psi0: 0.5,
+  final_t: 500,
+  save_plots: true,
 }
 
 // ---- Result shapes (mirror app/services/simulation_service.py serializers) ----
@@ -141,8 +134,8 @@ export interface EquilibriumBlock {
     inner_solve_count: number
     cache_hit_count: number
     cache_warm_start_count: number
-    inner_failure_count: number
-    max_inner_residual: number
+    inner_failure_count: number | null
+    max_inner_residual: number | null
     final_residual: number
     conservation_error: number
     last_price_change: number
@@ -223,6 +216,19 @@ export interface SimulateResult {
   equilibrium: EquilibriumBlock
   outer_history: OuterHistoryBlock
   trajectory: TrajectoryBlock
+  final_traffic: {
+    requested_duration: number
+    actual_duration: number
+    success: boolean
+    trajectory: TrajectoryBlock
+    total_user_cost: number
+    total_profit: number
+    total_revenue: number
+    occupancies: Record<string, number>
+    throughputs: Record<string, number>
+    profits: Record<string, number>
+  }
+  artifacts: { name: string; url: string }[]
 }
 
 export interface EquilibriumOnlyResult {

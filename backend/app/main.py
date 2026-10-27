@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import routes_jobs, routes_paper, routes_scenarios, routes_simulate
+from app.api import routes_artifacts, routes_jobs, routes_paper, routes_scenarios, routes_simulate
 
 app = FastAPI(
     title="EV Dynamic Pricing Simulator API",
@@ -28,6 +28,7 @@ app.include_router(routes_scenarios.router, prefix="/api")
 app.include_router(routes_simulate.router, prefix="/api")
 app.include_router(routes_paper.router, prefix="/api")
 app.include_router(routes_jobs.router, prefix="/api")
+app.include_router(routes_artifacts.router, prefix="/api")
 
 # In production we serve the built React app straight from FastAPI so the
 # whole project deploys as one web service (see README "Deployment").

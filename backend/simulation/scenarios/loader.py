@@ -34,8 +34,8 @@ SCENARIO_DESCRIPTIONS = {
         "description": (
             "Base network plus four additional pure-EV OD pairs (O1->D2, O2->D1, "
             "O2->D3, O3->D2) that only reach their destination via a shared "
-            "station, increasing utilization and queueing pressure on the shared "
-            "infrastructure."
+            "station. The exact supplied engine skips these four additional "
+            "OD groups because they lack road-only connections; results report them."
         ),
     },
     "i3": {
@@ -54,13 +54,11 @@ def build_network_from_data(data: dict, path_settings=None) -> ChargingNetwork:
     defaults = data.get("defaults", DEFAULT_DEFAULTS)
     classes = data.get("classes", ["EV", "NEV"])
 
-    net = ChargingNetwork(
-        classes=classes, defaults=defaults, path_settings=path_settings,
-    )
+    net = ChargingNetwork(classes=classes, defaults=defaults)
     fingerprint_payload = {
         "network": data,
         "path_settings": path_settings or {},
-        "builder_version": "predictive-reference-routes-v1",
+        "builder_version": "unchanged-source-v1",
     }
     net.cache_fingerprint = hashlib.sha256(
         json.dumps(

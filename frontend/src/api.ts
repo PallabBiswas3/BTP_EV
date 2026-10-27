@@ -7,6 +7,10 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
 
+export function artifactUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },

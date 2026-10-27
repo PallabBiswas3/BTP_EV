@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+backend/.outputs/
+backend/.cache/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+
+# Local verification files; keep them off GitHub.
+backend/tests/
+backend/benchmarks/
+backend/requirements-dev.txt
+.ecc/benchmarks/

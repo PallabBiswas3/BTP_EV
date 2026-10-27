@@ -190,8 +190,8 @@ export default function ControlsPanel({
             <label>Gradient step δ
               <input type="number" step="0.005" value={options.delta} onChange={(e) => setOption('delta', Number(e.target.value))} />
             </label>
-            <label>Price cap ψ_max
-              <input type="number" min={0.01} step="any" placeholder="No cap" value={options.psi_max ?? ''} onChange={(e) => setOption('psi_max', e.target.value === '' ? null : Number(e.target.value))} />
+            <label>Initial price (all stations)
+              <input type="number" min={0} step="any" value={options.psi0} onChange={(e) => setOption('psi0', Number(e.target.value))} />
             </label>
             <label>Gradient clip
               <input type="number" min={0.01} step="any" placeholder="No clipping" value={options.grad_clip ?? ''} onChange={(e) => setOption('grad_clip', e.target.value === '' ? null : Number(e.target.value))} />
@@ -210,6 +210,15 @@ export default function ControlsPanel({
             </label>
             <label>Outer step dt
               <input type="number" step="0.1" value={options.dt_outer} onChange={(e) => setOption('dt_outer', Number(e.target.value))} />
+            </label>
+            <label>Final fixed-price duration
+              <input type="number" min={0.01} step="any" value={options.final_t} onChange={(e) => setOption('final_t', Number(e.target.value))} />
+            </label>
+            <label>Save original PNG plots
+              <select value={options.save_plots ? 'yes' : 'no'} onChange={(e) => setOption('save_plots', e.target.value === 'yes')}>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
             </label>
             </div>
           </div>

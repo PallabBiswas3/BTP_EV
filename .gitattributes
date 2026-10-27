@@ -1,0 +1,3 @@
+# Preserve the supplied scripts byte-for-byte, including their line endings.
+backend/network_engine.py -text
+backend/sim.py -text

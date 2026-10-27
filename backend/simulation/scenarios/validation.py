@@ -66,7 +66,22 @@ def validate_network_data(data: dict) -> tuple[list[str], list[str]]:
         return errors, warnings
 
     try:
-        build_network_from_data(data)
+        net = build_network_from_data(data)
+        if net.N_STATES == 0:
+            errors.append("The supplied engine generated no simulation states for this network.")
+        unused = [name for name, edge in net.stations.items() if edge not in net.station_edges]
+        if unused:
+            errors.append(
+                "The supplied scripts cannot simulate stations without a selected route: "
+                + ", ".join(unused)
+            )
+        skipped = [
+            f"{od['name']}/{cls}" for od in net.ods
+            for cls, share in od["class_shares"].items()
+            if share > 0 and (od["name"], cls) not in net.groups
+        ]
+        if skipped:
+            warnings.append("Source route builder skips demanded groups: " + ", ".join(skipped))
     except ValueError as exc:
         errors.append(str(exc))
     except Exception as exc:  # noqa: BLE001

@@ -1,288 +1,144 @@
-# Backend — EV Dynamic Pricing Lab API
+# Backend - exact supplied simulation
 
-FastAPI service around the original research simulation code.
+Custom-network simulation executes the unchanged `network_engine.py` and
+`sim.py` in this directory. Their SHA-256 hashes match the two supplied files.
+The adapter modules under `simulation/` translate network JSON, report job
+progress, and serialize the original results; they do not replace the pricing
+loop, routing, demand functions, equilibrium forecasts, or ODE integration.
 
-## Current custom-network approach: predictive pricing
+See [exact-source implementation](../docs/exact_source_implementation.md) for
+behavior, source fingerprints, compatibility changes, and verification.
+The older [migration record](../docs/predictive_pricing_migration.md) describes
+the previous adapted implementation and is historical.
 
-The active backend now follows the supplied `dynamic-ev-pricing/sim.py`:
-two forecasts per station from the current state, simultaneous price updates,
-and one physical-time traffic interval per update. Defaults are `t_end=75000`,
-`h=1500`, `ctrl_horizon=10`, `profit_mode="end"`; price caps and gradient
-clipping default to disabled. `/simulate` returns a physical-time trajectory.
-The historical `equilibrium` response key denotes a dynamic endpoint.
+## Run the API
 
-[Predictive pricing migration](../docs/predictive_pricing_migration.md) is the
-current reference for API settings, numerical behavior, source parity tests,
-runtime considerations, and the complete previous/new comparison.
-
-The sections below record the **previous equilibrium-based implementation**
-and remain relevant to the preserved paper experiments. Their profile tables,
-equilibrium trajectory descriptions and older runtime figures do not describe
-current custom-network predictive runs. Server startup, job polling, network
-JSON structure and deployment instructions still apply; demand schedules are
-now additionally supported.
-
-## Layout
-
-```
-app/
-  main.py            FastAPI app, CORS, static-serves frontend/dist in prod
-  api/                routers (scenarios, simulate, paper, jobs)
-  schemas/            pydantic request/response models
-  services/
-    simulation_service.py   orchestrates build -> solve -> serialize
-    paper_service.py        paper-network experiment reproductions
-    jobs.py                 in-memory background job runner (see below)
-simulation/
-  core/network_engine.py    the math: traffic dynamics, replicator routing,
-                             station buffer dynamics, path costs (preserved
-                             from the original file; one documented fix, see
-                             its module docstring)
-  pricing/
-    equilibrium.py          inner-loop ODE solve (heavily reworked for
-                             performance + a numerical-stability fix — read
-                             its module docstring, it's worth it)
-    metrics.py               station/user-cost metrics
-    strategic_pricing.py     outer gradient-flow pricing loop
-  scenarios/loader.py        JSON scenario loading + build_network_from_data
-  scenarios/validation.py    custom-network validation
-  experiments/paper_experiments.py   the paper's exact fixed network
-networks/                    i.json / i2.json / i3.json
+```powershell
+cd backend
+python -m pip install -r requirements.txt
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
-## Why requests return a `job_id` instead of a result
+The API docs are at `/docs`. The default CORS origin is
+`http://localhost:5173`; set `CORS_ORIGINS` to change it. A built
+`frontend/dist` is served by FastAPI for a single-service deployment.
+Use one uvicorn worker: background jobs are stored in process memory.
 
-A full pricing run is a chain of ODE solves (an outer gradient-ascent loop,
-each step needing several inner traffic-equilibrium solves). Even after the
-performance work described in `equilibrium.py`, that can take anywhere from
-a few seconds to ~30-60s depending on network size and step count — too
-long to block a synchronous POST, and past the hard timeout most hosts
-(including Heroku, ~30s) enforce on a single request.
+## Run the original command-line workflow
 
-So `/api/simulate`, `/api/equilibrium`, `/api/beta-sweep`,
-`/api/compare-pricing`, and `/api/paper/experiment{1,2,3}` all return
-`{"job_id": "..."}` immediately. Poll `GET /api/jobs/{job_id}` for progress:
+The complete original CLI is available, including CSV loading, all PNG plots,
+console summaries, and final fixed-price continuation:
+
+```powershell
+cd backend
+python sim.py roads.csv stations.csv ods.csv --t-end 75000 --h 1500 --horizon 10 --profit-mode end --final-t 500
+```
+
+CSV headers are exactly those expected by the supplied script:
+
+- Roads: `u,v,classes,l0,L,a` (quote comma-separated classes).
+- Stations: `u,v,station_id,mu_s,a_s,c_s,phi0,initial_psi`.
+- OD pairs: `od_name,origin,dest,total_demand,ev_share,nev_share,demand_schedule`.
+
+The dashboard also accepts its existing column aliases and submits JSON.
+
+## API workflow
+
+`POST /api/simulate` returns a job ID. Poll `/api/jobs/{job_id}` until its
+status is `done` or `error`. Other job endpoints are `/api/equilibrium`,
+`/api/beta-sweep`, `/api/compare-pricing`, and `/api/paper/experiment{1,2,3}`.
+Scenario and validation endpoints remain synchronous.
+
+Example simulation options for a short smoke run:
 
 ```json
-{"job_id": "...", "status": "running", "phase": "Pricing iteration 7/30", "step": 7, "n_steps": 30, "result": null, "error": null}
+{
+  "t_end": 4,
+  "h": 2,
+  "ctrl_horizon": 2,
+  "profit_mode": "end",
+  "parallel": false,
+  "psi0": 0.5,
+  "final_t": 4,
+  "save_plots": false
+}
 ```
 
-`status` becomes `"done"` (with `result` populated) or `"error"` (with
-`error` set). The job store is a simple in-process dict — fine for a single
-uvicorn worker; swap it for a real queue (Celery/RQ + Redis) if you scale to
-multiple workers/dynos, since jobs submitted to one worker aren't visible to
-another.
+The usual network configuration goes beside `simulation_options` in the
+request. Source CLI defaults are `t_end=75000`, `h=1500`, `ctrl_horizon=10`,
+`profit_mode=end`, and `final_t=500`. `save_plots` defaults to true.
 
-## Endpoints
+The result contains:
 
-- `GET /api/health`
-- `GET /api/scenarios`, `GET /api/scenarios/{id}` — bundled i/i2/i3 networks
-- `POST /api/custom-network/validate` — synchronous, cheap; returns
-  `{valid, errors[], warnings[]}` for any network JSON, including specific
-  messages like "No feasible path found for OD 'OD1' class 'EV'..."
-- `POST /api/simulate` → job → `{network, equilibrium, outer_history, trajectory}`
-- `POST /api/equilibrium` → job → `{network, equilibrium, outer_history}` (no trajectory, cheaper)
-- `POST /api/beta-sweep` → job → equilibrium swept over a beta range
-- `POST /api/compare-pricing` → job → strategic NE vs. uniform fixed pricing
-- `POST /api/paper/experiment{1,2,3}` → job → paper reproductions on the paper's fixed network
-- `GET /api/jobs/{job_id}` — poll for status/progress/result
+- `equilibrium`: the pricing run's dynamic endpoint (historical key name).
+- `outer_history`: original post-update metrics with physical times added.
+- `trajectory`: original pricing state and price histories for the dashboard.
+- `final_traffic`: the source CLI's separate fixed-price continuation,
+  including trajectory and final metrics. Duration rounds upward to a whole h.
+- `artifacts`: original PNG plots downloadable from `/api/artifacts/...`.
 
-Interactive API docs are at `/docs` once the server is running.
+Plots are written to `backend/.outputs/<run_id>/`, which is gitignored.
+The Raw Data tab provides download links and both result sets.
+`/api/equilibrium` returns the pricing summary without plots or continuation.
 
-## Notable engineering decisions (read before changing the math)
+## Exact-source behavior
 
-`simulation/pricing/equilibrium.py` follows the supplied `sim4.py` BDF model,
-split residual, tolerances, maximum step, and 75000-unit default horizon. The
-backend surrounds that model with chunked path-flow renormalization, verified
-warm starts, persistent caching, sparse-Jacobian support, and defensive result
-metadata for a live API.
+The source does not filter routes using road/station class labels. It skips OD
+pairs lacking a road-only connection, including four extra groups in `i2.json`.
+Skipped demand is reported in response warnings without introducing routes.
+It keeps state only for selected routes and their stations. The API rejects
+networks with unused stations because the original station metrics cannot
+handle their missing states; no artificial states are added.
 
-`simulation/core/network_engine.py` computes road flow as `f = a*x` and uses
-`f/L` in the road-latency formula. It also adds bounded class-feasible path
-generation plus a cached sparse-Jacobian pattern.
+`psi0` is one uniform scalar, default 0.5. Station `initial_psi` is loaded but,
+as in the original loop, does not select starting prices. No upper price cap
+is available. `grad_clip` remains an optional source function argument.
+Predictive steps are `round(t_end/h)`; old step count, accuracy-profile and
+stopping fields are deprecated compatibility inputs and have no effect.
 
-## Unified optimized equilibrium approach
+The original serial loop uses a module-global worker network. The API
+serializes pricing runs to avoid concurrent requests replacing that network.
+The original process-pool behavior is retained; worker failures are not
+silently replaced with a different solver. Job exceptions are reported through
+the normal error response. Equilibrium-forecast messages are printed by the
+source; it does not return per-forecast convergence metadata.
 
-### Persistent reuse and caching
+The separate paper-reproduction endpoints retain their historical model in
+`legacy_network_engine.py`, `legacy_strategic_pricing.py`, and `equilibrium.py`.
+They are not part of the supplied CSV CLI workflow.
 
-Repeated requests reuse work at two levels:
+## Verification
 
-- An in-memory LRU cache (16 topologies) reuses the constructed NetworkX graph,
-  bounded route set, state indices, and lazily computed Jacobian sparsity.
-- A persistent SQLite equilibrium bank stores up to 512 converged states per
-  network/profile fingerprint in `backend/.cache/equilibria.sqlite3`.
-
-An exact network/price/tolerance hit is never trusted blindly: its ODE residual
-and route-flow conservation error are recomputed before integration is skipped.
-For a nearby price vector, the closest stored state within RMS price distance
-0.35 is only a BDF warm start; a fresh integration and convergence check are
-still mandatory. Failed or non-finite solves are never cached. Cache keys also
-contain a model-version string, full canonical network configuration, route
-profile, and solver tolerance, preventing incompatible results from being
-reused. Set `EVCS_CACHE_PATH` to relocate the SQLite file.
-
-### Accuracy profiles
-
-Simulation requests expose an `accuracy_mode` with three explicit trade-offs:
-
-| Profile | Maximum routes per OD/class | Inner horizon | Price gradient |
-|---|---:|---:|---|
-| `preview` | 8 | up to 1000 | coordinate central differences |
-| `balanced` | 16 | up to 1000 | coordinate central differences |
-| `research` | 32 | up to 1000 | coordinate central differences |
-
-`preview` is the default because large Research runs can take minutes per
-pricing step. Use `research` for final reported results and run it as a
-background/offline calculation; the API continues to publish job progress.
-
-Profiles now differ only in their candidate-route budgets. Every network and
-profile uses a chunked inner solve of up to 1000 time units and coordinate
-central differences. The inner solve stops early when the sum of the physical-
-state and route-flow L2 derivative norms is below `1e-6`. `research` remains
-the strictest route-set estimate. The
-response includes a quality block with route-cap hits,
-inner residuals, path-flow conservation error, gradient method, and a
-`certified` flag. A run is certified only when every nominal and
-gradient-perturbation solve meets tolerance, no OD/class group reaches an
-internal candidate-route cap, and the final outer-loop price change is at most
-`1e-4`.
-
-`n_steps` is the maximum requested outer-loop iteration count (also bounded by
-`max_outer_steps`). The loop stops early after `stable_outer_steps` consecutive
-fully converged iterations whose projected price change is at most
-`outer_tolerance`.
-
-The original builder enumerated every simple path for every OD pair and
-vehicle class. That works for the small paper topology, but path counts grow
-combinatorially on cyclic road networks. The bundled 24-node, 76-road,
-6-station network has approximately 66,512 EV paths and 20,759 NEV paths
-under unrestricted enumeration, producing roughly 87,000 route-flow states.
-
-The backend now uses the following strategy for every network size.
-
-- The interactive `preview` profile keeps one best road prefix and suffix per
-  reachable station, preserving station competition without enumerating
-  alternative segments that will not be displayed.
-- Each class-filtered road graph is constructed once per network build, and
-  repeated origin/station/destination segment queries reuse cached paths.
-- Path search stops immediately after collecting the requested number of
-  paths; it does not generate an extra path solely to detect truncation.
-
-### 1. Bounded, class-feasible route sets
-
-`ChargingNetwork.build()` retains a profile-dependent number of ranked
-K-shortest simple paths for each `(OD, class)` population (8, 16, or 32).
-It also enforces the paper's route definitions:
-
-- An EV path contains exactly one charging-station access edge.
-- An NEV path contains no charging-station access edge.
-
-For each reachable EV station, the builder combines ranked road-only paths
-from the origin to the station entrance with ranked road-only paths from the
-station exit to the destination. Combinations that revisit a node are removed.
-The shortest candidate through every reachable station is retained first;
-remaining slots are filled by free-flow path cost. This prevents the nearest
-station from consuming the entire route set.
-
-For `network_ods_roads_stations.json`, the Preview model contains:
-
-```text
-110 road-density states
-  6 station-occupancy states
- 96 route-choice states
----
-212 total ODE states
+```powershell
+cd backend
+python -m pip install -r requirements-dev.txt
+python -m unittest discover -s tests -v
 ```
 
-Network construction takes approximately 0.08 seconds on the development
-machine.
+Parity tests run against the local unchanged scripts by default. To compare
+with the external originals instead:
 
-### 2. Sparse BDF integration
-
-The inner equilibrium still uses SciPy's BDF integrator. The network computes
-and caches a structural Jacobian sparsity pattern and passes it to `solve_ivp`
-as `jac_sparsity`. Network ODEs are sparse because a state interacts mainly
-with nearby edges and paths in its OD/class group. Supplying this structure
-avoids dense finite-difference Jacobian work on every solve.
-
-Path costs are also compiled into a sparse path-link incidence matrix when the
-network is built. During every ODE evaluation, each unique road/station cost is
-computed once and all path costs are obtained with one sparse matrix-vector
-product instead of recomputing a road latency for every path that uses it.
-
-### 3. Chunked integration and route-flow projection
-
-Replicator dynamics normalize average cost by the current route-flow sum, so
-their vector field preserves each group's total even after a small numerical
-deviation. BDF can still introduce minor simplex error near a boundary.
-
-`solve_equilibrium()` advances BDF in 50-time-unit chunks until
-`||x_dot||_2 + ||y_dot||_2` is below `1e-6` or the requested maximum horizon
-is reached.
-For equilibrium integration only, route-choice derivatives are time-scaled by
-20 so small price perturbations do not require thousands of simulated time
-units to settle. This positive scaling does not change fixed points, and the
-terminal residual is evaluated using the original unscaled model dynamics.
-After every chunk it clips negative path flows and renormalizes every OD/class
-group to its known demand, then re-evaluates the residual. A finite late BDF
-failure resumes locally from its projected endpoint instead of discarding all
-progress and repeating the full cold solve.
-
-### 4. Warm-started pricing continuation
-
-The first pricing solve is cold-started. Every later nominal and perturbed
-solve starts from the preceding equilibrium estimate because consecutive
-price profiles are close.
-
-- Every cold, continuation, and perturbation solve uses the same configured
-  maximum horizon (1000 time units by default) and split L2 terminal event.
-
-Residual warnings remain visible in the API response and frontend.
-
-### 5. Coordinate price-gradient estimation
-
-Every network and accuracy profile uses the original station-by-station
-central difference. Each pricing iteration requires `2S` perturbed equilibrium
-solves for `S` stations. These independent solves run concurrently in a bounded
-process pool while their results are consumed in the original deterministic
-station order. Price bounds and gradient clipping remain applied. Set
-`EVCS_GRADIENT_WORKERS` to choose the worker limit (default 4), or set
-`EVCS_PARALLEL_GRADIENTS=0` to force serial execution. Unsupported custom
-time-varying demand callables automatically fall back to serial execution.
-
-### Accuracy and measured performance
-
-Every mode computes an equilibrium estimate over a profile-bounded,
-representative route set. It is not an exhaustive all-simple-path solution,
-which is unsuitable for an interactive service. Research mode uses the
-largest route budget. Runtime depends on CPU, solver tolerances, topology,
-demand, station count, worker count, and the number of pricing steps. On the
-development machine, the 212-state Preview model's RHS became about 3x faster,
-a formerly failing 1000-unit inner solve fell from 52.15 seconds to 3.61
-seconds, and a one-step four-worker coordinate-gradient benchmark was 2.26x
-faster than serial with identical prices and final state. Use job progress
-rather than assuming a fixed duration on other machines.
-
-## Running tests / a quick smoke check
-
-There's no formal test suite bundled (flag if you want one added), but a
-fast manual sanity check:
-
-```bash
-uvicorn app.main:app --reload &
-curl localhost:8000/api/health
-curl localhost:8000/api/scenarios
+```powershell
+$env:EVCS_REFERENCE_DIR = 'C:\Users\PALLAB\Desktop\dynamic-ev-pricing'
+python -m unittest discover -s tests -v
 ```
 
-## Environment variables
+Tests cover source fingerprints, all seven bundled networks, path construction,
+physical states, station histories, both profit objectives, step demand,
+equilibrium forecasts, parallel execution, progress, API validation,
+fixed-price continuation, original PNG generation and downloads.
 
-- `CORS_ORIGINS` — comma-separated allowed origins (default `http://localhost:5173`)
-- `PORT` — used by the Procfile in production
-- `WEB_CONCURRENCY` — uvicorn worker count in production (default **1**, and
-  that default matters: the job store in `jobs.py` is an in-process dict, so
-  a job submitted to worker A is invisible to a status poll that lands on
-  worker B. Don't raise this above 1 unless you first swap `jobs.py` for a
-  shared store — e.g. Redis, or even just SQLite — that all workers can see.)
-- `EVCS_GRADIENT_WORKERS` — maximum coordinate-gradient worker processes
-  (default `4`)
-- `EVCS_PARALLEL_GRADIENTS` — set to `0`/`false` to force serial gradients
+## Time one Sioux Falls pricing iteration
+
+```powershell
+cd backend
+python -u benchmarks/benchmark_iteration.py
+```
+
+This measures the first original pricing iteration with h=1500, a 10-interval
+forecast, endpoint profit and serial execution. It retains the full 15000-unit
+forecast horizon, times all 12 forecasts and the actual traffic advance, and
+excludes plots and final continuation. The detailed machine-specific result is
+saved to `.ecc/benchmarks/sioux_falls_one_iteration.json` at the repository root.
+Later iterations can take different times; this is one measurement, not a
+full-run runtime estimate.

@@ -12,6 +12,7 @@ from app.schemas.network import (
 )
 from app.services import jobs
 from app.services import simulation_service as svc
+from simulation.scenarios.validation import validate_network_data
 
 router = APIRouter(tags=["simulation"])
 
@@ -21,16 +22,12 @@ def _network_dict(network) -> dict:
 
 
 def _check_buildable(network: dict, accuracy_mode: str, psi0=None):
-    """Fail fast with a 422 (not a 500 from inside a background thread) if
-    the network can't even be built -- e.g. an OD pair with no feasible
-    path for its class."""
+    """Reject malformed inputs and source-unsupported states before queuing."""
     try:
-        # Use the same cached builder and route profile as the background job.
-        # Besides keeping validation consistent, the job receives an immediate
-        # cache hit instead of constructing a large route set twice.
-        net = svc.build_network(network, accuracy_mode)
-        if psi0 and set(psi0) - set(net.stations):
-            raise ValueError(f"Unknown initial-price stations: {sorted(set(psi0) - set(net.stations))}")
+        errors, _warnings = validate_network_data(network)
+        if errors:
+            raise ValueError("; ".join(errors))
+        svc.build_network(network, accuracy_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
