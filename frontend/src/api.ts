@@ -5,7 +5,7 @@ import type {
   ValidationResult,
 } from './types'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+const API_BASE = (import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? 'http://localhost:8000' : '')).replace(/\/+$/, '')
 
 export function artifactUrl(path: string): string {
   return `${API_BASE}${path}`

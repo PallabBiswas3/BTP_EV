@@ -156,27 +156,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Then open `http://localhost:8000` â€” no separate frontend server needed.
 
-## Deploying (e.g. Heroku)
+## Hosting
 
-The `Procfile` in `backend/` is set up for this single-service pattern:
-
-```
-web: uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${WEB_CONCURRENCY:-1}
-```
-
-1. Build the frontend (`npm run build` inside `frontend/`) and make sure
-   `frontend/dist` is present in whatever you deploy (commit it, or run the
-   build as part of your CI/deploy step before `git push heroku main`).
-2. Deploy the repo root (with `backend/Procfile` at `backend/Procfile` â€”
-   point your platform's app root at `backend/`, or move the Procfile to
-   the repo root and adjust the `cd` accordingly).
-3. Set `CORS_ORIGINS` if you're *not* using single-service mode (e.g. if the
-   frontend is hosted separately on Vercel/Netlify) â€” otherwise the default
-   same-origin setup needs no CORS configuration at all.
-
-Because the async job pattern (see backend README) keeps every HTTP request
-short, this comfortably fits Heroku's ~30s router timeout even though the
-underlying ODE solving can take much longer.
+Deploy the dashboard and API together using the root `Dockerfile` and
+`render.yaml`. See [the hosting guide](docs/hosting.md) for Render setup,
+local Docker commands, compute sizing, and job persistence limits.
+Use exactly one instance and one Uvicorn worker.
 
 ## What's implemented vs. deferred
 

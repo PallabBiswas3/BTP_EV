@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ev-dynamic-pricing-lab
+    runtime: docker
+    plan: free
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
