@@ -15,7 +15,8 @@ import {
 } from '@xyflow/react'
 
 import type { NetworkConfig, TrajectoryBlock } from '../types'
-import { computeLayout } from '../utils/layout'
+import { computeLayout, stationNodePositions } from '../utils/layout'
+import Sparkline from './Sparkline'
 
 export type ViewMode = 'total' | 'ev' | 'nev' | 'latency'
 
@@ -47,8 +48,9 @@ interface CleanEdgeData extends Record<string, unknown> {
   label?: string
 }
 
-const PRIVATE_STATION_COLOR = '#06b6d4'
-const SHARED_STATION_COLOR = '#a855f7'
+const PRIVATE_STATION_COLOR = '#0e7f97'
+const SHARED_STATION_COLOR = '#6250d6'
+const STATION_PREFIX = 'station::'
 
 function isSharedStation(name: string) {
   const normalized = name.toLowerCase()
@@ -107,10 +109,18 @@ function CleanEdge({
 const edgeTypes = { clean: CleanEdge }
 
 function CleanNode({ data }: NodeProps) {
-  const label = String((data as { label?: unknown }).label ?? '')
+  const d = data as { label?: unknown; kind?: string; utilisation?: number; queued?: boolean }
+  const label = String(d.label ?? '')
   return (
     <>
-      <span>{label}</span>
+      {d.kind === 'station' ? (
+        <>
+          <span className="station-node-name">{label}</span>
+          <div className={`station-node-meter${d.queued ? ' queued' : ''}`}>
+            <span style={{ width: `${Math.round(100 * Math.min(d.utilisation ?? 0, 1))}%` }} />
+          </div>
+        </>
+      ) : <span>{label}</span>}
       <Handle type="source" position={Position.Top} id="source-top" />
       <Handle type="source" position={Position.Right} id="source-right" />
       <Handle type="source" position={Position.Bottom} id="source-bottom" />
@@ -125,6 +135,99 @@ function CleanNode({ data }: NodeProps) {
 
 const nodeTypes = { clean: CleanNode }
 
+interface StationCardProps {
+  network: NetworkConfig
+  trajectory: TrajectoryBlock | null
+  timeIndex: number
+  name: string
+  x: number
+  y: number
+}
+
+function StationCard({ network, trajectory, timeIndex, name, x, y }: StationCardProps) {
+  const station = network.stations.find((item) => item.name === name)
+  if (!station) return null
+  const st = trajectory?.stations[name]
+  const idx = trajectory ? Math.min(timeIndex, trajectory.time.length - 1) : -1
+  const mu = station.mu_s ?? network.defaults.mu_s
+  const rate = station.a_s ?? network.defaults.a_s
+  const cost = station.c_s ?? network.defaults.c_s
+  const K = st?.saturation_K ?? mu / rate
+  const style = {
+    position: 'fixed' as const,
+    left: x + 18 + 312 > window.innerWidth ? x - 18 - 312 : x + 18,
+    top: Math.max(8, Math.min(y - 60, window.innerHeight - 400)),
+  }
+  const color = stationColor(name)
+
+  if (!st || idx < 0) {
+    return (
+      <div className="station-card-pop" style={style}>
+        <div className="scp-head"><h3>{name}</h3><span>{station.u} → {station.v}</span></div>
+        <div className="scp-tags"><span>{isSharedStation(name) ? 'Shared station' : 'Private station'}</span></div>
+        <div className="scp-section">
+          <div className="scp-stats">
+            <div><small>Max service rate</small><b>{mu.toFixed(2)}</b><small>μ_s</small></div>
+            <div><small>Saturates at</small><b>{K.toFixed(2)}</b><small>vehicles K_s</small></div>
+            <div><small>Unit cost</small><b>{cost.toFixed(2)}</b><small>c_s</small></div>
+          </div>
+        </div>
+        <div className="scp-row"><span>Run a simulation to see price, occupancy and profit here.</span></div>
+      </div>
+    )
+  }
+
+  const occupancy = st.occupancy[idx] ?? 0
+  const queue = st.queue[idx] ?? 0
+  // Scale the bar so the saturation point stays visible even with a long queue.
+  const scale = Math.max(occupancy, K) * 1.15 || 1
+  return (
+    <div className="station-card-pop" style={style}>
+      <div className="scp-head"><h3>{name}</h3><span>t = {trajectory!.time[idx].toFixed(1)}</span></div>
+      <div className="scp-tags">
+        <span>{isSharedStation(name) ? 'Shared station' : 'Private station'}</span>
+        <span>{station.u} → {station.v}</span>
+      </div>
+
+      <div className="scp-section">
+        <div className="scp-stats">
+          <div><small>Price ψ</small><b>{(st.price[idx] ?? 0).toFixed(3)}</b><small>cost c_s {cost.toFixed(2)}</small></div>
+          <div><small>Throughput ρ</small><b>{(st.throughput[idx] ?? 0).toFixed(3)}</b><small>max {mu.toFixed(2)}</small></div>
+          <div><small>Profit π</small><b>{(st.profit[idx] ?? 0).toFixed(3)}</b><small>per time</small></div>
+        </div>
+      </div>
+
+      <div className="scp-section">
+        <div className="scp-label">Vehicles at the station</div>
+        <div className="scp-gauge">
+          <span style={{ width: `${(100 * occupancy) / scale}%`, background: queue > 0.005 ? 'var(--cong-2)' : color }} />
+          <em style={{ left: `${(100 * K) / scale}%` }} />
+        </div>
+        <div className="scp-row">
+          <b>{occupancy.toFixed(3)} vehicles</b>
+          <span>dashed line: saturation K_s = {K.toFixed(2)}</span>
+        </div>
+        <div className="scp-row">
+          {queue > 0.005
+            ? <b style={{ color: 'var(--danger)' }}>Queue {queue.toFixed(3)} · wait {(st.waiting_time[idx] ?? 0).toFixed(3)}</b>
+            : <span>No queue</span>}
+        </div>
+      </div>
+
+      <div className="scp-section">
+        <div className="scp-label">Price over the run</div>
+        <Sparkline marker={idx} height={50} format={(v) => v.toFixed(3)}
+          series={[{ label: 'ψ', color, values: st.price }]} />
+      </div>
+      <div className="scp-section">
+        <div className="scp-label">Occupancy over the run</div>
+        <Sparkline marker={idx} height={50} format={(v) => v.toFixed(2)}
+          series={[{ label: 'x', color, values: st.occupancy }]} />
+      </div>
+    </div>
+  )
+}
+
 export default function NetworkGraph({
   network,
   trajectory,
@@ -134,16 +237,22 @@ export default function NetworkGraph({
   onSelectStation,
 }: Props) {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [stationCard, setStationCard] = useState<{ name: string; x: number; y: number } | null>(null)
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null)
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null)
   const activeNodeId = focusedNodeId ?? hoveredNodeId
   const layout = useMemo(() => computeLayout(network), [network])
+  const stationPositions = useMemo(
+    () => stationNodePositions(layout, network.stations, network.roads),
+    [layout, network.stations, network.roads],
+  )
 
   // A newly loaded scenario may not contain the previously hovered/selected
   // node. Clear transient graph UI so stale focus cannot fade the new graph.
   useEffect(() => {
     setTooltip(null)
+    setStationCard(null)
     setHoveredEdgeId(null)
     setHoveredNodeId(null)
     setFocusedNodeId(null)
@@ -167,7 +276,30 @@ export default function NetworkGraph({
       })
     }
 
-    return [...layout.entries()].map(([id, pos]) => {
+    const idx = trajectory ? Math.min(timeIndex, trajectory.time.length - 1) : -1
+    const stationNodes: Node[] = network.stations.flatMap((station) => {
+      const pos = stationPositions.get(station.name)
+      if (!pos) return []
+      const st = trajectory?.stations[station.name]
+      const occupancy = st && idx >= 0 ? st.occupancy[idx] : 0
+      const shared = isSharedStation(station.name)
+      const dimmed = focusedNodeId && station.u !== focusedNodeId && station.v !== focusedNodeId
+      return [{
+        id: `${STATION_PREFIX}${station.name}`,
+        type: 'clean',
+        // Junction nodes are 42px and station nodes 62x50; centre both on their layout point.
+        position: { x: pos.x - 10, y: pos.y - 4 },
+        data: {
+          label: station.name, kind: 'station',
+          utilisation: st ? occupancy / (st.saturation_K || 1) : 0,
+          queued: Boolean(st && idx >= 0 && st.queue[idx] > 0.005),
+        },
+        className: `station-node ${shared ? 'shared-station' : 'private-station'}${selectedStation === station.name ? ' selected-station' : ''}${dimmed ? ' dimmed-node' : ''}`,
+        draggable: false,
+      }]
+    })
+
+    const junctionNodes: Node[] = [...layout.entries()].map(([id, pos]) => {
       const isOrigin = network.ods.some((od) => od.origin === id)
       const isDestination = network.ods.some((od) => od.dest === id)
       const roleClass = isOrigin
@@ -184,7 +316,8 @@ export default function NetworkGraph({
         draggable: false,
       }
     })
-  }, [layout, network.ods, network.roads, network.stations, focusedNodeId])
+    return [...junctionNodes, ...stationNodes]
+  }, [layout, stationPositions, network.ods, network.roads, network.stations, focusedNodeId, trajectory, timeIndex, selectedStation])
 
   const edges: Edge[] = useMemo(() => {
     const out: Edge[] = []
@@ -196,9 +329,11 @@ export default function NetworkGraph({
       roadCounts.set(key, (roadCounts.get(key) ?? 0) + 1)
     })
     const stationSeen = new Map<string, number>()
+    const point = (id: string) => (id.startsWith(STATION_PREFIX)
+      ? stationPositions.get(id.slice(STATION_PREFIX.length)) : layout.get(id))
     const handles = (u: string, v: string) => {
-      const source = layout.get(u)
-      const target = layout.get(v)
+      const source = point(u)
+      const target = point(v)
       if (!source || !target) return {}
       const dx = target.x - source.x
       const dy = target.y - source.y
@@ -236,7 +371,9 @@ export default function NetworkGraph({
       const seen = roadSeen.get(key) ?? 0
       const count = roadCounts.get(key) ?? 1
       roadSeen.set(key, seen + 1)
-      const connectedToFocus = !activeNodeId || road.u === activeNodeId || road.v === activeNodeId
+      // Hovering a station shows its card; it should not fade the rest of the network.
+      const connectedToFocus = !activeNodeId || activeNodeId.startsWith(STATION_PREFIX)
+        || road.u === activeNodeId || road.v === activeNodeId
       const hasVisibleFlow = Boolean(rt && idx >= 0 && xValue > 0.005)
       const showLabel = hoveredEdgeId === edgeId || hasVisibleFlow
 
@@ -249,13 +386,13 @@ export default function NetworkGraph({
         className: isNevOnly ? 'nev-edge' : 'road-edge',
         animated: intensity > 0.72,
         style: {
-          stroke: isNevOnly ? '#9c8256' : '#8b8b87',
+          stroke: isNevOnly ? '#eb6834' : '#6f6c66',
           strokeWidth: 1.35 + intensity * 4.5,
           opacity: connectedToFocus ? (hasVisibleFlow ? 0.62 + intensity * 0.38 : 0.28) : 0.07,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: isNevOnly ? '#9c8256' : '#686864',
+          color: isNevOnly ? '#eb6834' : '#55524c',
           width: 12 + intensity * 9,
           height: 12 + intensity * 9,
         },
@@ -272,54 +409,26 @@ export default function NetworkGraph({
     })
 
     network.stations.forEach((station, i) => {
-      const edgeId = `station:${i}:${station.name}`
+      const nodeId = `${STATION_PREFIX}${station.name}`
       const st = trajectory?.stations[station.name]
-      const occupancy = st && idx >= 0 ? st.occupancy[idx] : undefined
-      const saturation = st?.saturation_K
-      const intensity = occupancy !== undefined && saturation
-        ? Math.min(1, occupancy / saturation)
-        : 0
-      const key = pairKey(station.u, station.v)
-      const stationIndex = stationSeen.get(key) ?? 0
-      stationSeen.set(key, stationIndex + 1)
-      const roadCount = roadCounts.get(key) ?? 0
-      const selected = selectedStation === station.name
+      const throughput = st && idx >= 0 ? (st.throughput[idx] ?? 0) : 0
       const color = stationColor(station.name)
-      const connectedToFocus = !activeNodeId || station.u === activeNodeId || station.v === activeNodeId
-      const showValue = selected || hoveredEdgeId === edgeId || intensity > 0.02
-
-      out.push({
-        id: edgeId,
-        source: station.u,
-        target: station.v,
-        ...handles(station.u, station.v),
+      const connectedToFocus = !activeNodeId || activeNodeId.startsWith(STATION_PREFIX)
+        || station.u === activeNodeId || station.v === activeNodeId
+      const selected = selectedStation === station.name
+      const shared = {
         type: 'clean',
-        className: `station-edge ${isSharedStation(station.name) ? 'shared-station-edge' : 'private-station-edge'}${selected ? ' selected-edge' : ''}`,
-        animated: intensity > 0.8,
-        style: {
-          stroke: color,
-          strokeWidth: (selected ? 4.5 : 2.8) + intensity * 2.4,
-          opacity: connectedToFocus ? 1 : 0.1,
-        },
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color,
-          width: 14 + intensity * 9,
-          height: 14 + intensity * 9,
-        },
-        data: {
-          kind: 'station',
-          station,
-          st,
-          displayLabel: showValue ? `${station.name} · x ${(occupancy ?? 0).toFixed(2)}` : station.name,
-          labelTone: isSharedStation(station.name) ? 'shared' : 'private',
-          parallelOffset: (roadCount > 0 ? 11 : 0) + stationIndex * 8,
-        } satisfies CleanEdgeData,
-      })
+        className: 'station-edge',
+        style: { stroke: color, strokeWidth: selected ? 3.2 : 2.2, opacity: connectedToFocus ? 0.95 : 0.1 },
+        markerEnd: { type: MarkerType.ArrowClosed, color, width: 13, height: 13 },
+        data: { kind: 'station', station, st, parallelOffset: 0 } satisfies CleanEdgeData,
+      }
+      out.push({ id: `station:${i}:in`, source: station.u, target: nodeId, ...handles(station.u, nodeId), ...shared, animated: throughput > 0.005 })
+      out.push({ id: `station:${i}:out`, source: nodeId, target: station.v, ...handles(nodeId, station.v), ...shared })
     })
 
     return out
-  }, [network, trajectory, timeIndex, mode, selectedStation, layout, hoveredEdgeId, activeNodeId])
+  }, [network, trajectory, timeIndex, mode, selectedStation, layout, stationPositions, hoveredEdgeId, activeNodeId])
 
   const showTooltip = (event: React.MouseEvent, edge: Edge) => {
     setHoveredEdgeId(edge.id)
@@ -348,24 +457,19 @@ export default function NetworkGraph({
         )
       }
       setTooltip({ x, y, title: `Road ${data.label}`, lines })
-    } else if (data?.kind === 'station' && data.station) {
-      const station = data.station
-      const st = data.st
-      const lines = [`link: ${station.u} → ${station.v}`]
-      if (st && idx >= 0) {
-        lines.push(
-          `price ψ: ${(st.price[idx] ?? 0).toFixed(3)}`,
-          `occupancy: ${(st.occupancy[idx] ?? 0).toFixed(3)} (K=${st.saturation_K.toFixed(2)})`,
-          `queue: ${(st.queue[idx] ?? 0).toFixed(3)}`,
-          `throughput ρ: ${(st.throughput[idx] ?? 0).toFixed(3)}`,
-        )
-      }
-      setTooltip({ x, y, title: `Station ${station.name}`, lines })
+    } else {
+      setTooltip(null)
     }
   }
 
   const showNodeTooltip = (event: React.MouseEvent, node: Node) => {
     setHoveredNodeId(node.id)
+    if (node.id.startsWith(STATION_PREFIX)) {
+      setTooltip(null)
+      setStationCard({ name: node.id.slice(STATION_PREFIX.length), x: event.clientX, y: event.clientY })
+      return
+    }
+    setStationCard(null)
     const rect = (event.target as HTMLElement)
       .closest('.network-shell')
       ?.getBoundingClientRect()
@@ -415,25 +519,29 @@ export default function NetworkGraph({
         onNodeMouseMove={showNodeTooltip}
         onNodeMouseLeave={() => {
           setTooltip(null)
+          setStationCard(null)
           setHoveredNodeId(null)
         }}
-        onNodeClick={(_, node) => setFocusedNodeId(node.id === focusedNodeId ? null : node.id)}
+        onNodeClick={(_, node) => {
+          if (node.id.startsWith(STATION_PREFIX)) {
+            const name = node.id.slice(STATION_PREFIX.length)
+            onSelectStation(name === selectedStation ? null : name)
+          } else {
+            setFocusedNodeId(node.id === focusedNodeId ? null : node.id)
+          }
+        }}
         onPaneClick={() => {
           setFocusedNodeId(null)
           setHoveredNodeId(null)
-        }}
-        onEdgeClick={(_, edge) => {
-          const data = edge.data as CleanEdgeData | undefined
-          if (data?.kind === 'station' && data.station) {
-            onSelectStation(data.station.name === selectedStation ? null : data.station.name)
-          }
         }}
       >
         <Background gap={24} size={0.7} color="#e7e4dc" />
         <Controls showInteractive={false} />
       </ReactFlow>
 
-      <div className="network-hint">Hover for details · Click a node to lock focus</div>
+      <div className="network-hint">Hover a station for its details · Click a station to select it, a junction to focus</div>
+
+      {stationCard && <StationCard network={network} trajectory={trajectory} timeIndex={timeIndex} {...stationCard} />}
 
       {tooltip && (
         <div className="graph-tooltip" style={{ left: tooltip.x, top: tooltip.y }}>

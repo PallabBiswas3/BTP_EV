@@ -52,7 +52,10 @@ export default function RouteChoice({ trajectory, timeIndex }: Props) {
               return (
                 <div className="route-path" key={pid}>
                   <div>
-                    <div className="route-path-desc" style={{ color: colorForIndex(i) }}>{p.nodes.join(' → ')}</div>
+                    <div className="route-path-desc">
+                      <i style={{ display: 'inline-block', width: 14, height: 4, borderRadius: 2, marginRight: 6, verticalAlign: 'middle', background: colorForIndex(i) }} />
+                      {p.nodes.join(' → ')}
+                    </div>
                     {p.stations_used.length > 0 && (
                       <div className="muted" style={{ fontSize: 11 }}>via {p.stations_used.join(', ')}</div>
                     )}

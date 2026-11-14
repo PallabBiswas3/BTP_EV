@@ -182,3 +182,73 @@ export function computeLayout(network: NetworkConfig): Map<string, LayoutNode> {
 
   return new Map(ids.map((id, i) => [id, { id, ...positions[i], layer: 0 }]))
 }
+
+interface StationLink { name: string; u: string; v: string }
+
+/**
+ * Place each station as its own node between the two junctions it connects.
+ * Stations sharing a junction pair, or a pair that also has a road, are
+ * spread sideways so nothing overlaps.
+ */
+export function stationNodePositions(
+  layout: Map<string, { x: number; y: number }>,
+  stations: StationLink[],
+  roads: { u: string; v: string }[],
+  spacing = 64,
+): Map<string, { x: number; y: number }> {
+  const pair = (u: string, v: string) => (u < v ? `${u}|${v}` : `${v}|${u}`)
+  const roadPairs = new Set(roads.map((road) => pair(road.u, road.v)))
+  const groups = new Map<string, StationLink[]>()
+  stations.forEach((station) => {
+    const key = pair(station.u, station.v)
+    groups.set(key, [...(groups.get(key) ?? []), station])
+  })
+  const out = new Map<string, { x: number; y: number }>()
+  groups.forEach((members, key) => {
+    const [a, b] = key.split('|')
+    const from = layout.get(a)
+    const to = layout.get(b)
+    if (!from || !to) return
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const length = Math.hypot(dx, dy) || 1
+    const nx = -dy / length
+    const ny = dx / length
+    // With a road on the same pair, keep every station off that road line.
+    const offsets = roadPairs.has(key)
+      ? members.map((_, i) => (Math.floor(i / 2) + 1) * (i % 2 === 0 ? 1 : -1))
+      : members.map((_, i) => i - (members.length - 1) / 2)
+    members.forEach((station, i) => {
+      out.set(station.name, {
+        x: (from.x + to.x) / 2 + nx * offsets[i] * spacing,
+        y: (from.y + to.y) / 2 + ny * offsets[i] * spacing,
+      })
+    })
+  })
+
+  // Push station nodes clear of junctions and of each other; junctions stay put.
+  const clearance = 86
+  const names = [...out.keys()]
+  const fixed = [...layout.values()]
+  for (let iteration = 0; iteration < 80; iteration += 1) {
+    let moved = false
+    names.forEach((name, i) => {
+      const p = out.get(name)!
+      const push = (q: { x: number; y: number }, share: number) => {
+        let dx = p.x - q.x
+        let dy = p.y - q.y
+        let distance = Math.hypot(dx, dy)
+        if (distance >= clearance) return
+        if (distance < 0.001) { dx = 0; dy = 1; distance = 1 }
+        const shift = (clearance - distance + 0.5) * share
+        p.x += (dx / distance) * shift
+        p.y += (dy / distance) * shift
+        moved = true
+      }
+      fixed.forEach((q) => push(q, 1))
+      names.forEach((other, j) => { if (j !== i) push(out.get(other)!, 0.5) })
+    })
+    if (!moved) break
+  }
+  return out
+}

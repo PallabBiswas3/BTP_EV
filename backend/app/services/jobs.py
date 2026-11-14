@@ -24,9 +24,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from app.services import admission
+from app.services.execution_config import positive_int
+
 _LOCK = threading.Lock()
 _JOBS: dict[str, "Job"] = {}
-_MAX_JOBS = 200  # simple bound so a long-running server doesn't leak memory
+_MAX_JOBS = positive_int("EVCS_MAX_JOBS", 200)
 _JOB_TTL_SECONDS = 3600
 
 
@@ -40,26 +43,37 @@ class Job:
     result: Optional[dict] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
 
 
 def _prune_locked():
-    if len(_JOBS) <= _MAX_JOBS:
-        return
     now = time.time()
     for jid in list(_JOBS):
-        if now - _JOBS[jid].created_at > _JOB_TTL_SECONDS:
+        job = _JOBS[jid]
+        if job.status != "running" and now - (job.finished_at or job.created_at) > _JOB_TTL_SECONDS:
             del _JOBS[jid]
+    finished = sorted((job for job in _JOBS.values() if job.status != "running"),
+                      key=lambda job: job.finished_at or job.created_at)
+    for job in finished[:max(0, len(_JOBS) - _MAX_JOBS + 1)]:
+        del _JOBS[job.id]
+    if len(_JOBS) >= _MAX_JOBS:
+        raise admission.BusyError("Job storage is full. Please wait for an active run to finish.")
 
 
 def submit(fn: Callable[[Callable[[str, int, int], None]], dict]) -> str:
     """Run `fn(report_progress)` in a background thread. `fn` must call
     `report_progress(phase, step, n_steps)` periodically and return the
     (JSON-serializable) result dict on success, or raise on failure."""
-    job_id = uuid.uuid4().hex
-    job = Job(id=job_id)
-    with _LOCK:
-        _prune_locked()
-        _JOBS[job_id] = job
+    lease = admission.acquire()
+    try:
+        job_id = uuid.uuid4().hex
+        job = Job(id=job_id)
+        with _LOCK:
+            _prune_locked()
+            _JOBS[job_id] = job
+    except BaseException:
+        lease.release()
+        raise
 
     def report_progress(phase: str, step: int, n_steps: int):
         with _LOCK:
@@ -80,8 +94,18 @@ def submit(fn: Callable[[Callable[[str, int, int], None]], dict]) -> str:
                 job.error = f"{exc}"
                 job.phase = "Failed"
             traceback.print_exc()
+        finally:
+            with _LOCK:
+                job.finished_at = time.time()
+            lease.release()
 
-    threading.Thread(target=run, daemon=True).start()
+    try:
+        threading.Thread(target=run, daemon=True).start()
+    except BaseException:
+        with _LOCK:
+            _JOBS.pop(job_id, None)
+        lease.release()
+        raise
     return job_id
 
 
@@ -91,12 +115,13 @@ def get(job_id: str) -> Optional[Job]:
 
 
 def to_dict(job: Job) -> dict[str, Any]:
-    return {
-        "job_id": job.id,
-        "status": job.status,
-        "phase": job.phase,
-        "step": job.step,
-        "n_steps": job.n_steps,
-        "result": job.result if job.status == "done" else None,
-        "error": job.error,
-    }
+    with _LOCK:
+        return {
+            "job_id": job.id,
+            "status": job.status,
+            "phase": job.phase,
+            "step": job.step,
+            "n_steps": job.n_steps,
+            "result": job.result if job.status == "done" else None,
+            "error": job.error,
+        }

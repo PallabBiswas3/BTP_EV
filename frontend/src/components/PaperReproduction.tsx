@@ -116,10 +116,10 @@ export default function PaperReproduction({ exp1, exp2, exp3, running, onRun1, o
             <div className="chart-area">
               <LineSeriesChart x={exp3.beta} xLabel="β" yLabel="value"
                 series={[
-                  { id: 'profit_s', label: 'profit (strategic)', color: '#2a5f5b', values: exp3.strategic.profit },
-                  { id: 'profit_f', label: 'profit (fixed)', color: '#9c8256', values: exp3.fixed.profit },
-                  { id: 'cost_s', label: 'user cost (strategic)', color: '#c15b3f', values: exp3.strategic.user_cost },
-                  { id: 'cost_f', label: 'user cost (fixed)', color: '#b0743a', values: exp3.fixed.user_cost },
+                  { id: 'profit_s', label: 'profit (strategic)', color: '#2a78d6', values: exp3.strategic.profit },
+                  { id: 'profit_f', label: 'profit (fixed)', color: '#1baf7a', values: exp3.fixed.profit },
+                  { id: 'cost_s', label: 'user cost (strategic)', color: '#eb6834', values: exp3.strategic.user_cost },
+                  { id: 'cost_f', label: 'user cost (fixed)', color: '#6250d6', values: exp3.fixed.user_cost },
                 ]} />
             </div>
           </div>

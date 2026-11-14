@@ -211,6 +211,13 @@ export interface TrajectoryBlock {
   total_revenue: number[]
 }
 
+export type RunStreamEvent<T> =
+  | { type: 'progress'; phase: string; step: number; n_steps: number }
+  | { type: 'heartbeat' }
+  | { type: 'artifact'; name: string; url: string; mime_type: 'image/png'; data_base64: string }
+  | { type: 'result'; result: T }
+  | { type: 'error'; code: string; message: string }
+
 export interface SimulateResult {
   network: NetworkConfig
   equilibrium: EquilibriumBlock
@@ -312,5 +319,93 @@ export interface JobStatus<T> {
 export interface ValidationResult {
   valid: boolean
   errors: string[]
+  warnings: string[]
+}
+
+// ---- Solar + battery + fast/slow charger model (mirrors backend/simulation/energy/loop.py) ----
+
+export interface EnergyOptions {
+  t_end: number
+  h: number
+  horizon: number
+  kappa: number
+  delta: number
+  price_cap: number | null
+  parallel: boolean
+}
+
+export const DEFAULT_ENERGY_OPTIONS: EnergyOptions = {
+  t_end: 72,
+  h: 0.5,
+  horizon: 2,
+  kappa: 4,
+  delta: 5,
+  price_cap: null,
+  parallel: true,
+}
+
+export interface EnergyChargerSeries {
+  site: string
+  mode: string
+  count: number
+  power_kw: number
+  price: number[]
+  arrivals: number[]
+  throughput: number[]
+  occupancy: number[]
+  queue: number[]
+}
+
+export interface EnergySiteTotals {
+  hours: number
+  revenue: number
+  energy_cost: number
+  fixed_cost: number
+  profit: number
+  vehicles_served: number
+  energy_delivered_kwh: number
+  grid_energy_bought_kwh: number
+  solar_curtailed_kwh: number
+  share_solar_direct: number
+  share_battery: number
+  share_grid_direct: number
+  average_price: Record<string, number>
+}
+
+export interface EnergySiteSeries {
+  strategic: boolean
+  has_solar: boolean
+  has_storage: boolean
+  chargers: string[]
+  solar_peak_kw: number
+  battery_capacity_kwh: number
+  soc: number[]
+  load_kw: number[]
+  solar_available_kw: number[]
+  solar_to_load_kw: number[]
+  solar_to_battery_kw: number[]
+  solar_curtailed_kw: number[]
+  grid_to_load_kw: number[]
+  grid_to_battery_kw: number[]
+  battery_to_load_kw: number[]
+  stored_kwh: number[]
+  marginal_cost: number[]
+  revenue_rate: number[]
+  energy_cost_rate: number[]
+  profit_rate: number[]
+  summary: EnergySiteTotals
+  last_day: EnergySiteTotals
+}
+
+export interface EnergyResult {
+  model: 'energy-pricing'
+  scenario: Record<string, unknown>
+  units: { time: string; power: string; energy: string; currency: string; price: string }
+  time: number[]
+  hour_of_day: number[]
+  tariff: number[]
+  chargers: Record<string, EnergyChargerSeries>
+  sites: Record<string, EnergySiteSeries>
+  settings: Record<string, number | string | boolean | null>
   warnings: string[]
 }

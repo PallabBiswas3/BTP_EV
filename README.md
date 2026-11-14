@@ -120,6 +120,24 @@ full default run can be expensive. Source routing skips OD pairs without a
 road-only connection and does not enforce class labels; these behaviors now
 apply exactly, with skipped demand reported in warnings.
 
+## Solar, battery and fast/slow chargers
+
+A separate model in `backend/simulation/energy/` gives each site fast and slow
+chargers, optional solar panels and a battery, and a grid tariff that varies
+through the day. Sites choose their charger prices and their energy mix for
+profit. This is future work: its **Solar & Battery** tab is hidden by default. Show it by
+opening the dashboard with `?energy=1`, or set `VITE_SHOW_ENERGY_TAB=1` in `frontend/.env`
+and rebuild. It also runs from the command line:
+
+```powershell
+cd backend
+python -m simulation.energy.cli energy_networks/two_od_solar_battery.json --t-end 96 --parallel
+```
+
+See [the model description](docs/energy_station_model.md) and
+[the plan for learned forecasters](docs/ml_forecaster_plan.md). The supplied
+`network_engine.py` and `sim.py` are unchanged.
+
 ## Quick start (development, two servers)
 
 Requires Python 3.11+ and Node 18+.
@@ -158,6 +176,13 @@ Then open `http://localhost:8000` â€” no separate frontend server needed.
 
 ## Hosting
 
+For Google Cloud Run, see [setup and verification](docs/cloud_run_setup.md).
+The [local verification report](docs/cloud_run_verification.md) records benchmark
+inputs, timings, and the remaining deployment checks.
+The Cloud Run profile streams progress, original PNGs and the final result in
+one active request; no Redis is required. The existing Render/local job-polling
+flow remains available by default.
+
 Deploy the dashboard and API together using the root `Dockerfile` and
 `render.yaml`. See [the hosting guide](docs/hosting.md) for Render setup,
 local Docker commands, compute sizing, and job persistence limits.
@@ -174,6 +199,6 @@ Model Explanation) plus a Raw Data / JSON+CSV export tab.
 
 Deliberately deferred (flag if you want these built out next): a drag-and-
 drop custom-network *builder* UI (today you can validate/simulate arbitrary
-JSON, but there's no visual editor for it), WebSocket/SSE push (progress
-uses polling instead, which was simpler and just as effective at this
-scale), and SVG chart export (original simulation PNGs and JSON/CSV export are available).
+JSON, but there's no visual editor for it), WebSocket/SSE protocols (Cloud Run
+uses NDJSON streaming; local/Render uses polling by default), and SVG chart
+export (original simulation PNGs and JSON/CSV export are available).

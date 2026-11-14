@@ -1,0 +1,69 @@
+{
+  "label": "Two OD pairs, three competing sites and a fixed-price public charger",
+  "description": "The paper's two-OD layout with a shared middle site. S1 has solar and a battery, Sshared has solar only, S2 buys everything from the grid; each has 2 fast and 2 slow chargers. Public is a fixed-price charger that does not optimise, so travellers always have an outside option.",
+  "units": {"time": "hour", "power": "kW", "energy": "kWh", "currency": "INR"},
+  "day_length": 24.0,
+  "energy_per_vehicle_kwh": 20.0,
+  "defaults": {"l0": 0.25, "L": 40.0, "a": 6.0, "alpha": 1.0, "gamma": 0.006667, "eta": 5.0},
+  "grid": {"load_coefficient": 0.0},
+  "profiles": {
+    "solar": [0, 0, 0, 0, 0, 0, 0.05, 0.2, 0.4, 0.6, 0.8, 0.95, 1.0, 0.95, 0.8, 0.6, 0.4, 0.2, 0.05, 0, 0, 0, 0, 0],
+    "tariff": [6, 6, 6, 6, 6, 6, 7, 8, 9, 9, 8, 8, 8, 8, 8, 8, 9, 10, 12, 12, 12, 12, 9, 7],
+    "demand": {
+      "commute": [0.3, 0.2, 0.2, 0.2, 0.3, 0.5, 0.8, 1.1, 1.3, 1.2, 1.0, 0.9, 0.9, 0.9, 0.9, 1.0, 1.1, 1.3, 1.4, 1.3, 1.1, 0.8, 0.6, 0.4]
+    }
+  },
+  "weather": [1.0],
+  "roads": [
+    {"u": "O1", "v": "A1"},
+    {"u": "A1", "v": "D1", "classes": ["NEV"]},
+    {"u": "O2", "v": "A2"},
+    {"u": "A2", "v": "D2", "classes": ["NEV"]},
+    {"u": "O1", "v": "M"},
+    {"u": "O2", "v": "M"},
+    {"u": "N", "v": "D1"},
+    {"u": "N", "v": "D2"}
+  ],
+  "sites": [
+    {
+      "name": "S1", "u": "A1", "v": "D1",
+      "chargers": [
+        {"mode": "fast", "count": 2, "power_kw": 50, "time_weight": 1.0, "initial_price": 380},
+        {"mode": "slow", "count": 2, "power_kw": 10, "time_weight": 0.3, "initial_price": 340}
+      ],
+      "solar": {"peak_kw": 80},
+      "battery": {
+        "capacity_kwh": 200, "max_charge_kw": 60, "max_discharge_kw": 60,
+        "eta_c": 0.95, "eta_d": 0.95, "soc_min": 0.1, "soc_max": 0.9, "soc_init": 0.5,
+        "degradation_cost": 0.5
+      },
+      "fixed_cost_per_day": 900, "maintenance_per_day": 100
+    },
+    {
+      "name": "Sshared", "u": "M", "v": "N",
+      "chargers": [
+        {"mode": "fast", "count": 2, "power_kw": 50, "time_weight": 1.0, "initial_price": 380},
+        {"mode": "slow", "count": 2, "power_kw": 10, "time_weight": 0.3, "initial_price": 340}
+      ],
+      "solar": {"peak_kw": 80},
+      "fixed_cost_per_day": 500, "maintenance_per_day": 60
+    },
+    {
+      "name": "S2", "u": "A2", "v": "D2",
+      "chargers": [
+        {"mode": "fast", "count": 2, "power_kw": 50, "time_weight": 1.0, "initial_price": 380},
+        {"mode": "slow", "count": 2, "power_kw": 10, "time_weight": 0.3, "initial_price": 340}
+      ]
+    },
+    {
+      "name": "Public", "u": "M", "v": "N", "strategic": false,
+      "chargers": [
+        {"mode": "fast", "count": 3, "power_kw": 50, "time_weight": 1.0, "initial_price": 420}
+      ]
+    }
+  ],
+  "ods": [
+    {"name": "OD1", "origin": "O1", "dest": "D1", "lam": 80, "shares": {"EV": 0.1, "NEV": 0.9}, "demand_profile": "commute"},
+    {"name": "OD2", "origin": "O2", "dest": "D2", "lam": 80, "shares": {"EV": 0.1, "NEV": 0.9}, "demand_profile": "commute"}
+  ]
+}

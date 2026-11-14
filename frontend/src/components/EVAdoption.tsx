@@ -81,8 +81,8 @@ export default function EVAdoption({ result, running, onRun }: Props) {
             <div className="chart-area">
               <LineSeriesChart x={result.beta} xLabel="β" yLabel="value"
                 series={[
-                  { id: 'profit', label: 'total station profit', color: '#2a5f5b', values: result.total_profit },
-                  { id: 'cost', label: 'total user cost', color: '#c15b3f', values: result.total_user_cost },
+                  { id: 'profit', label: 'total station profit', color: '#2a78d6', values: result.total_profit },
+                  { id: 'cost', label: 'total user cost', color: '#eb6834', values: result.total_user_cost },
                 ]} />
             </div>
           </div>

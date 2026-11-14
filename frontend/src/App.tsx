@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ControlsPanel from './components/ControlsPanel'
 import EVAdoption from './components/EVAdoption'
+import EnergyPricing from './components/EnergyPricing'
 import ModelExplanation from './components/ModelExplanation'
 import NetworkGraph, { type ViewMode } from './components/NetworkGraph'
 import PaperReproduction from './components/PaperReproduction'
@@ -12,29 +13,37 @@ import StationCards from './components/StationCards'
 import StrategicVsFixed from './components/StrategicVsFixed'
 import {
   artifactUrl, fetchScenarioNetwork, fetchScenarios, runBetaSweep, runComparePricing,
-  runPaperExperiment1, runPaperExperiment2, runPaperExperiment3, runSimulate, validateNetwork,
+  runEnergySimulate, runPaperExperiment1, runPaperExperiment2, runPaperExperiment3, runSimulate, validateNetwork,
 } from './api'
 import type {
-  BetaSweepResult, ComparePricingResult, NetworkConfig, PaperExperiment1Result,
+  BetaSweepResult, ComparePricingResult, EnergyOptions, EnergyResult, NetworkConfig, PaperExperiment1Result,
   PaperExperiment2Result, PaperExperiment3Result, ScenarioMeta, SimulateResult, SimulationOptions,
 } from './types'
 import { DEFAULT_SIMULATION_OPTIONS } from './types'
+import { releaseResultArtifacts } from './stream'
 
-type Tab = 'network' | 'pricing' | 'routes' | 'stations' | 'adoption' | 'compare' | 'paper' | 'explain' | 'data'
+type Tab = 'network' | 'pricing' | 'routes' | 'stations' | 'adoption' | 'compare' | 'energy' | 'paper' | 'explain' | 'data'
 
-const TABS: { id: Tab; label: string }[] = [
+// The Solar & Battery model is future work and hidden by default. Show it by
+// setting VITE_SHOW_ENERGY_TAB=1 in frontend/.env, or by opening the page with ?energy=1.
+const SHOW_ENERGY_TAB = import.meta.env.VITE_SHOW_ENERGY_TAB === '1'
+  || new URLSearchParams(window.location.search).get('energy') === '1'
+
+const ALL_TABS: { id: Tab; label: string }[] = [
   { id: 'network', label: 'Network Dynamics' },
   { id: 'pricing', label: 'Pricing Dynamics' },
   { id: 'routes', label: 'Route Choice' },
   { id: 'stations', label: 'Station Analysis' },
   { id: 'adoption', label: 'EV Adoption' },
   { id: 'compare', label: 'Strategic vs Fixed' },
+  { id: 'energy', label: 'Solar & Battery' },
   { id: 'paper', label: 'Paper Reproduction' },
   { id: 'explain', label: 'Model Explanation' },
   { id: 'data', label: 'Raw Data' },
 ]
+const TABS = ALL_TABS.filter((t) => t.id !== 'energy' || SHOW_ENERGY_TAB)
 
-type ActiveJob = 'simulate' | 'equilibrium' | 'beta' | 'compare' | 'exp1' | 'exp2' | 'exp3' | null
+type ActiveJob = 'simulate' | 'equilibrium' | 'beta' | 'compare' | 'energy' | 'exp1' | 'exp2' | 'exp3' | null
 
 export default function App() {
   const [scenarios, setScenarios] = useState<ScenarioMeta[]>([])
@@ -60,8 +69,34 @@ export default function App() {
   const [exp1, setExp1] = useState<PaperExperiment1Result | null>(null)
   const [exp2, setExp2] = useState<PaperExperiment2Result | null>(null)
   const [exp3, setExp3] = useState<PaperExperiment3Result | null>(null)
+  const [energyResult, setEnergyResult] = useState<EnergyResult | null>(null)
 
   const playTimer = useRef<number | null>(null)
+  const requestController = useRef<AbortController | null>(null)
+
+  useEffect(() => () => { requestController.current?.abort() }, [])
+  useEffect(() => () => { releaseResultArtifacts(result) }, [result])
+
+  const beginRun = (kind: ActiveJob): AbortSignal | null => {
+    if (requestController.current) return null
+    const controller = new AbortController()
+    requestController.current = controller
+    setActiveJob(kind)
+    setProgress({ phase: 'Preparing network', step: 0, nSteps: 0 })
+    setError('')
+    return controller.signal
+  }
+
+  const finishRun = (signal: AbortSignal) => {
+    if (requestController.current?.signal === signal) {
+      requestController.current = null
+      setActiveJob(null)
+    }
+  }
+
+  const runError = (err: unknown, signal: AbortSignal, fallback: string) => {
+    setError(signal.aborted ? 'Request cancelled.' : err instanceof Error ? err.message : fallback)
+  }
 
   // Load scenario list once, then the initial network.
   useEffect(() => {
@@ -105,16 +140,19 @@ export default function App() {
 
   const simulate = async () => {
     if (!network) return
-    setActiveJob('simulate'); setError(''); setValidationMsg(null)
+    const signal = beginRun('simulate')
+    if (!signal) return
+    setValidationMsg(null)
     try {
-      const r = await runSimulate(network, options, onProgress)
+      const r = await runSimulate(network, options, onProgress, signal)
+      if (signal.aborted) { releaseResultArtifacts(r); return }
       setResult(r)
       setTimeIndex(0)
       setPlaying(r.trajectory.time.length > 1)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Simulation failed.')
+      runError(err, signal, 'Simulation failed.')
     } finally {
-      setActiveJob(null)
+      finishRun(signal)
     }
   }
 
@@ -135,38 +173,53 @@ export default function App() {
 
   const runBeta = async (betaMin: number, betaMax: number, betaStep: number) => {
     if (!network) return
-    setActiveJob('beta'); setError('')
+    const signal = beginRun('beta')
+    if (!signal) return
     try {
-      setBetaResult(await runBetaSweep(network, options, betaMin, betaMax, betaStep, onProgress))
+      setBetaResult(await runBetaSweep(network, options, betaMin, betaMax, betaStep, onProgress, signal))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Beta sweep failed.')
+      runError(err, signal, 'Beta sweep failed.')
     } finally {
-      setActiveJob(null)
+      finishRun(signal)
     }
   }
 
   const runCompare = async () => {
     if (!network) return
-    setActiveJob('compare'); setError('')
+    const signal = beginRun('compare')
+    if (!signal) return
     try {
-      setCompareResult(await runComparePricing(network, options, onProgress))
+      setCompareResult(await runComparePricing(network, options, onProgress, signal))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Comparison failed.')
+      runError(err, signal, 'Comparison failed.')
     } finally {
-      setActiveJob(null)
+      finishRun(signal)
+    }
+  }
+
+  const runEnergy = async (scenario: Record<string, unknown>, energyOptions: EnergyOptions) => {
+    const signal = beginRun('energy')
+    if (!signal) return
+    try {
+      setEnergyResult(await runEnergySimulate(scenario, energyOptions, onProgress, signal))
+    } catch (err) {
+      runError(err, signal, 'Energy pricing run failed.')
+    } finally {
+      finishRun(signal)
     }
   }
 
   const runExp = async (which: 1 | 2 | 3, nSteps: number) => {
-    setActiveJob(which === 1 ? 'exp1' : which === 2 ? 'exp2' : 'exp3'); setError('')
+    const signal = beginRun(which === 1 ? 'exp1' : which === 2 ? 'exp2' : 'exp3')
+    if (!signal) return
     try {
-      if (which === 1) setExp1(await runPaperExperiment1(nSteps, onProgress))
-      else if (which === 2) setExp2(await runPaperExperiment2(nSteps, onProgress))
-      else setExp3(await runPaperExperiment3(nSteps, onProgress))
+      if (which === 1) setExp1(await runPaperExperiment1(nSteps, onProgress, signal))
+      else if (which === 2) setExp2(await runPaperExperiment2(nSteps, onProgress, signal))
+      else setExp3(await runPaperExperiment3(nSteps, onProgress, signal))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Paper experiment failed.')
+      runError(err, signal, 'Paper experiment failed.')
     } finally {
-      setActiveJob(null)
+      finishRun(signal)
     }
   }
 
@@ -321,8 +374,8 @@ export default function App() {
                     <span><i className="legend-origin" /> Origin</span>
                     <span><i className="legend-destination" /> Destination</span>
                     <span><i className="legend-road" /> Road</span>
-                    <span><i className="legend-shared" /> Shared station</span>
-                    <span><i className="legend-private" /> Private station</span>
+                    <span><i className="legend-station shared" /> Shared station</span>
+                    <span><i className="legend-station private" /> Private station</span>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
@@ -367,6 +420,7 @@ export default function App() {
                   </div>
                 </div>
                 <StationCards network={network} equilibrium={result?.equilibrium ?? null}
+                              trajectory={result?.trajectory ?? null} timeIndex={timeIndex}
                               selectedStation={selectedStation} onSelectStation={setSelectedStation} />
               </div>
             </div>
@@ -377,6 +431,7 @@ export default function App() {
           {tab === 'stations' && <div className="panel network-panel"><StationAnalysis trajectory={result?.trajectory ?? null} timeIndex={timeIndex} selectedStation={selectedStation} onSelectStation={setSelectedStation} /></div>}
           {tab === 'adoption' && <div className="panel network-panel"><EVAdoption result={betaResult} running={activeJob === 'beta'} onRun={runBeta} /></div>}
           {tab === 'compare' && <div className="panel network-panel"><StrategicVsFixed result={compareResult} running={activeJob === 'compare'} onRun={runCompare} /></div>}
+          {tab === 'energy' && <div className="panel network-panel"><EnergyPricing result={energyResult} running={activeJob === 'energy'} onRun={runEnergy} /></div>}
           {tab === 'paper' && (
             <div className="panel network-panel">
               <PaperReproduction
@@ -399,7 +454,7 @@ export default function App() {
               </p>}
               {result && result.artifacts.length > 0 && <ul>
                 {result.artifacts.map((artifact) => <li key={artifact.url}>
-                  <a href={artifactUrl(artifact.url)} target="_blank" rel="noreferrer">{artifact.name}</a>
+                  <a href={artifactUrl(artifact.url)} download={artifact.name} target="_blank" rel="noreferrer">{artifact.name}</a>
                 </li>)}
               </ul>}
               <pre>{JSON.stringify(result ?? { message: 'Run a simulation to inspect the backend response.' }, null, 2)}</pre>
@@ -408,7 +463,8 @@ export default function App() {
         </section>
       </main>
 
-      {running && <ProgressOverlay phase={progress.phase || 'Working…'} step={progress.step} nSteps={progress.nSteps} />}
+      {running && <ProgressOverlay phase={progress.phase || 'Working…'} step={progress.step} nSteps={progress.nSteps}
+        onCancel={() => requestController.current?.abort()} />}
     </div>
   )
 }

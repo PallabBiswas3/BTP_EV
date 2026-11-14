@@ -1,17 +1,17 @@
-"""Predictive simulation endpoints using asynchronous background jobs.
+"""Predictive simulation endpoints with shared execution admission.
 
 Each price update requires two traffic forecasts per station and one actual
-physical-time advancement. Return a job ID immediately; clients poll
-GET /api/jobs/{job_id} for phase, update progress, and the final JSON result.
+physical-time advancement. Cloud mode streams progress and final output through
+one active request; local/Render mode retains job submission and polling.
 The historical /equilibrium URL returns the predictive endpoint summary.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.schemas.network import (
     BetaSweepRequest, ComparePricingRequest, EquilibriumRequest, SimulateRequest,
 )
-from app.services import jobs
 from app.services import simulation_service as svc
+from app.services.streaming import dispatch
 from simulation.scenarios.validation import validate_network_data
 
 router = APIRouter(tags=["simulation"])
@@ -33,7 +33,7 @@ def _check_buildable(network: dict, accuracy_mode: str, psi0=None):
 
 
 @router.post("/simulate")
-def simulate(req: SimulateRequest):
+def simulate(req: SimulateRequest, request: Request):
     network = _network_dict(req.network)
     _check_buildable(network, req.simulation_options.accuracy_mode, req.simulation_options.psi0)
     options = req.simulation_options
@@ -42,11 +42,11 @@ def simulate(req: SimulateRequest):
         result = svc.run_simulate(network, options, report_progress=report_progress)
         return {"network": network, **result}
 
-    return {"job_id": jobs.submit(work)}
+    return dispatch(request, "simulate", {"network": network, "simulation_options": options.model_dump()}, work)
 
 
 @router.post("/equilibrium")
-def equilibrium(req: EquilibriumRequest):
+def equilibrium(req: EquilibriumRequest, request: Request):
     network = _network_dict(req.network)
     _check_buildable(network, req.simulation_options.accuracy_mode, req.simulation_options.psi0)
     options = req.simulation_options
@@ -55,11 +55,11 @@ def equilibrium(req: EquilibriumRequest):
         result = svc.run_equilibrium(network, options, report_progress=report_progress)
         return {"network": network, **result}
 
-    return {"job_id": jobs.submit(work)}
+    return dispatch(request, "equilibrium", {"network": network, "simulation_options": options.model_dump()}, work)
 
 
 @router.post("/beta-sweep")
-def beta_sweep(req: BetaSweepRequest):
+def beta_sweep(req: BetaSweepRequest, request: Request):
     network = _network_dict(req.network)
     _check_buildable(network, req.simulation_options.accuracy_mode, req.simulation_options.psi0)
     options = req.simulation_options
@@ -70,11 +70,14 @@ def beta_sweep(req: BetaSweepRequest):
             report_progress=report_progress,
         )
 
-    return {"job_id": jobs.submit(work)}
+    return dispatch(request, "beta-sweep", {
+        "network": network, "simulation_options": options.model_dump(),
+        "beta_min": req.beta_min, "beta_max": req.beta_max, "beta_step": req.beta_step,
+    }, work)
 
 
 @router.post("/compare-pricing")
-def compare_pricing(req: ComparePricingRequest):
+def compare_pricing(req: ComparePricingRequest, request: Request):
     network = _network_dict(req.network)
     _check_buildable(network, req.simulation_options.accuracy_mode, req.simulation_options.psi0)
     options = req.simulation_options
@@ -83,4 +86,4 @@ def compare_pricing(req: ComparePricingRequest):
         report_progress("Simulating strategic and fixed-price policies", 0, 2)
         return svc.run_compare_pricing(network, options, report_progress=report_progress)
 
-    return {"job_id": jobs.submit(work)}
+    return dispatch(request, "compare-pricing", {"network": network, "simulation_options": options.model_dump()}, work)
