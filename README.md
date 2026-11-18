@@ -137,7 +137,7 @@ docker run -p 8000:8000 ev-pricing-lab
 ```
 
 Run exactly one instance with one worker, because running jobs are kept in
-memory. The [hosting guide](docs/hosting.md) covers deployment on Render.
+memory. `render.yaml` configures a single-instance deployment on Render.
 
 ## Project layout
 
@@ -151,7 +151,6 @@ backend/
 frontend/
   src/                  React and TypeScript dashboard
   examples/             sample CSV networks for import
-docs/                   implementation notes and the hosting guide
 Dockerfile, render.yaml single-service deployment
 ```
 
@@ -174,7 +173,7 @@ These behaviours come from the reference scripts and are kept on purpose.
   parallel forecasts. The command line uses a look-ahead of ten.
 
 The two reference scripts are byte-for-byte copies, checked by their SHA-256
-digests. See the [implementation record](docs/exact_source_implementation.md).
+digests.
 
 ## Configuration
 
@@ -199,11 +198,3 @@ from the command line:
 cd backend
 python -m simulation.energy.cli energy_networks/two_od_solar_battery.json --t-end 96 --parallel
 ```
-
-## Further documentation
-
-- [Implementation record](docs/exact_source_implementation.md): how the
-  reference scripts are integrated and verified.
-- [Problem statement and methodology (PDF)](docs/problem_statement_and_methodology.pdf):
-  a formal statement of the earlier nested-equilibrium formulation.
-- [Hosting guide](docs/hosting.md): Render deployment and Docker.

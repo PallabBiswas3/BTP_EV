@@ -1,13 +1,55 @@
-__pycache__/
-*.py[cod]
-backend/.outputs/
-backend/.cache/
-backend/.venv/
-frontend/node_modules/
-frontend/dist/
+# ---------------------------------------------------------------------------
+# Only the code needed to reproduce the results is pushed:
+# backend/, frontend/, README.md, Dockerfile, render.yaml and the dotfiles
+# that configure them. Everything below stays on this machine.
+# ---------------------------------------------------------------------------
 
-# Local verification files; keep them off GitHub.
+# Documentation, report and presentation material
+docs/
+
+# Assistant notes and local tool state
+CLAUDE.md
+.claude/
+.ecc/
+
+# Cloud Run deployment and HTTP verification scripts (not needed to reproduce)
+deploy/
+.gcloudignore
+scripts/
+
+# Local verification files
 backend/tests/
 backend/benchmarks/
 backend/requirements-dev.txt
-.ecc/benchmarks/
+
+# Generated output
+backend/.outputs/
+backend/.cache/
+frontend/dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.vscode/
+.idea/
+*.log
+Thumbs.db
+Desktop.ini
+.DS_Store

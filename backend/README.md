@@ -6,11 +6,6 @@ The adapter modules under `simulation/` translate network JSON, report job
 progress, and serialize the original results; they do not replace the pricing
 loop, routing, demand functions, equilibrium forecasts, or ODE integration.
 
-See [exact-source implementation](../docs/exact_source_implementation.md) for
-behavior, source fingerprints, compatibility changes, and verification.
-The older [migration record](../docs/predictive_pricing_migration.md) describes
-the previous adapted implementation and is historical.
-
 ## Run the API
 
 ```powershell
